@@ -2,7 +2,7 @@
 
 > **Find your people. Be yourself.**
 
-BiCircle is a community platform focused on friendship, peer support, shared interests, personal stories, and community circles. It is deliberately **not a dating app**.
+BiCircle is primarily a community platform focused on friendship, peer support, shared interests, personal stories, and community circles. An optional, separate **See Your Match** area supports adults who explicitly opt in to relationship discovery; it never changes the default friendship and support experience.
 
 ## Technology
 
@@ -43,7 +43,7 @@ firebase deploy --only firestore:rules,firestore:indexes,storage,functions
 firebase deploy --only hosting
 ```
 
-## Backend migration status
+## See Your Match\n\nThe optional `/see-your-match` section lets adults opt in to discovery and select friendship, serious relationship, casual dating, or casual sexual connection as relationship focuses. Sexual orientation is optional and is only included in the discoverable profile when the member explicitly chooses to share it. Interest requests remain pending until the recipient accepts; members can decline, block, or report. The feature uses `relationship_profiles` and `match_requests` Firestore collections and requires the rules in `firestore.rules`.\n\n**Launch caution:** the age checkbox is a self-attestation, not identity or age verification. Implement an appropriate age-assurance process and test Firestore rules in the Firebase Emulator Suite before production. This feature is not yet a fully verified production dating/matching system.\n\n## Backend migration status
 
 This repository now includes Firebase Hosting configuration, Firestore indexes and security rules, Storage rules and upload helpers, a Cloud Functions package, and Firebase Auth-only sign-in/sign-up behavior. No Supabase data or accounts are migrated.
 
