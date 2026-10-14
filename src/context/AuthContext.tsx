@@ -131,6 +131,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Fail signup if Firestore profile creation fails; do not create a local fake account.
       await setDoc(doc(db, 'profiles', uid), newProfile);
       await setDoc(doc(db, 'user_private', uid), privateProfile);
+      // Keep the current legacy data service's local cache in sync while its full
+      // Firestore migration is pending; this cache is not an authentication source.
+      store.profiles = store.profiles.filter(profile => profile.id !== uid);
+      store.profiles.push(newProfile);
+      store.userPrivateMap[uid] = privateProfile;
+      store.save();
       setCurrentUser(newProfile);
       setUserPrivate(privateProfile);
       if (typeof window !== 'undefined') localStorage.setItem('bicircle_current_user_id', uid);
