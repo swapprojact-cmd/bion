@@ -33,7 +33,7 @@ Copy .env.example to .env.local and fill these values from your own Firebase Web
     VITE_FIREBASE_APP_ID=your-web-app-id
     VITE_FIRESTORE_DATABASE_ID=(default)
 
-If you leave these unset, the app currently falls back to the checked-in AI Studio Firebase app config. Set all values to your new project's actual values to use your fresh project. Never put Admin SDK credentials in VITE_* variables.
+The app intentionally fails fast when any required Firebase value is missing; it does not silently connect to the previous AI Studio project. Never put Admin SDK credentials in VITE_* variables.
 
 ## 3. Select the Firebase CLI project
 
