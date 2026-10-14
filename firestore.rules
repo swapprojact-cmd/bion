@@ -200,12 +200,8 @@ service cloud.firestore {
     // Sexual orientation is only stored in a readable discovery document when the
     // member explicitly chooses to show it; Firestore rules cannot hide individual fields.
     match /relationship_profiles/{userId} {
-      function notBlockedBetween(a, b) {
-        return !exists(/databases/$(database)/documents/blocks/$(a + '_' + b))
-          && !exists(/databases/$(database)/documents/blocks/$(b + '_' + a));
-      }
       allow read: if self(userId)
-        || (signedIn() && resource.data.opted_in == true && notBlockedBetween(request.auth.uid, userId));
+        || (signedIn() && resource.data.opted_in == true);
       allow create: if self(userId)
         && request.resource.data.uid == userId
         && request.resource.data.opted_in is bool
@@ -242,7 +238,11 @@ service cloud.firestore {
         && request.resource.data.sender_id == resource.data.sender_id
         && request.resource.data.recipient_id == resource.data.recipient_id
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updated_at'])
-        && request.resource.data.status in ['accepted', 'declined'];
+        && request.resource.data.status in ['accepted', 'declined']
+        && exists(/databases/$(database)/documents/relationship_profiles/$(resource.data.sender_id))
+        && get(/databases/$(database)/documents/relationship_profiles/$(resource.data.sender_id)).data.opted_in == true
+        && !exists(/databases/$(database)/documents/blocks/$(resource.data.sender_id + '_' + request.auth.uid))
+        && !exists(/databases/$(database)/documents/blocks/$(request.auth.uid + '_' + resource.data.sender_id));
       allow delete: if participants();
     }
 
