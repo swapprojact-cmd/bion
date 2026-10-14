@@ -153,14 +153,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('bicircle_current_user_id');
   };
 
-  const switchDemoAccount = async (userId: string) => {
-    const prof = await DataService.getProfileById(userId);
-    if (prof) {
-      setCurrentUser(prof);
-      localStorage.setItem('bicircle_current_user_id', prof.id);
-      const priv = await DataService.getUserPrivate(prof.id);
-      setUserPrivate(priv);
-    }
+  // Demo account switching is intentionally disabled in Firebase-only mode.
+  const switchDemoAccount = async (_userId: string) => {
+    console.warn('Demo account switching is disabled. Sign in with Firebase Authentication.');
   };
 
   const updateCurrentProfile = async (updates: Partial<Profile>) => {
@@ -175,12 +170,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUserPrivate(updated);
   };
 
+  // Demo reset must never authenticate a user or grant client-side privileges.
   const resetAllDemoData = () => {
     store.resetToDefault();
-    const maya = store.profiles[0];
-    setCurrentUser(maya);
-    setUserPrivate(store.userPrivateMap[maya.id]);
-    localStorage.setItem('bicircle_current_user_id', maya.id);
+    console.info('Local demo data was reset. Firebase Auth session and server data were not changed.');
   };
 
   return (
