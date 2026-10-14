@@ -64,7 +64,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
           </div>
           <h1 className="text-2xl font-bold font-display text-white">System Operations</h1>
           <p className="text-xs text-[#B9B0C6] mt-1">
-            Platform governance, Supabase database verification, and user permission management.
+            Platform governance, Firebase configuration, and user permission management.
           </p>
         </div>
 
