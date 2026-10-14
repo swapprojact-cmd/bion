@@ -65,7 +65,7 @@ export const SeeYourMatchPage: React.FC = () => {
         username: currentUser.username,
         bio: currentUser.bio || '',
         interests: currentUser.interests || [],
-        orientation: orientation || '',
+        orientation: showOrientation ? (orientation || '') : '',
         show_orientation: showOrientation,
         focus,
         opted_in: enabled,
