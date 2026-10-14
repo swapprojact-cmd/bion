@@ -12,6 +12,7 @@ permissions:
 jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,20 +21,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Build app
         run: npm run build
         env:
-          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
-          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
-          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
-          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
-          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
-          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_FIREBASE_API_KEY: AIzaSyBYGTaeJ6Jy9KIyjifTNI_8dR7AG35vQJE
+          VITE_FIREBASE_AUTH_DOMAIN: ai-studio-applet-webapp-8c041.firebaseapp.com
+          VITE_FIREBASE_PROJECT_ID: ai-studio-applet-webapp-8c041
+          VITE_FIREBASE_STORAGE_BUCKET: ai-studio-applet-webapp-8c041.firebasestorage.app
+          VITE_FIREBASE_MESSAGING_SENDER_ID: "981047281108"
+          VITE_FIREBASE_APP_ID: "1:981047281108:web:40106933cfa2bf32f1c241"
           VITE_FIRESTORE_DATABASE_ID: ai-studio-bicirclebisexual-7b1ba258-2320-4251-a404-a27b5a1fc949
 
       - name: Deploy to Firebase Hosting
