@@ -17,6 +17,7 @@ export const SeeYourMatchPage: React.FC = () => {
   const { currentUser, userPrivate } = useAuth();
   const [profiles, setProfiles] = useState<MatchProfile[]>([]);
   const [requests, setRequests] = useState<MatchRequest[]>([]);
+  const [outgoingRequests, setOutgoingRequests] = useState<MatchRequest[]>([]);
   const [enabled, setEnabled] = useState(false);
   const [orientation, setOrientation] = useState('');
   const [showOrientation, setShowOrientation] = useState(false);
@@ -31,15 +32,17 @@ export const SeeYourMatchPage: React.FC = () => {
     if (!currentUser) { setLoading(false); return; }
     setLoading(true);
     try {
-      const [peopleSnap, requestsSnap, mineSnap, blocksSnap] = await Promise.all([
+      const [peopleSnap, requestsSnap, mineSnap, blocksSnap, outgoingSnap] = await Promise.all([
         getDocs(query(collection(db, 'relationship_profiles'), where('opted_in', '==', true))),
         getDocs(query(collection(db, 'match_requests'), where('recipient_id', '==', currentUser.id))),
         getDocs(query(collection(db, 'relationship_profiles'), where('uid', '==', currentUser.id))),
         getDocs(query(collection(db, 'blocks'), where('blocker_id', '==', currentUser.id))),
+        getDocs(query(collection(db, 'match_requests'), where('sender_id', '==', currentUser.id))),
       ]);
       const blockedIds = new Set(blocksSnap.docs.map(d => String(d.data().blocked_id || '')));
       setProfiles(peopleSnap.docs.map(d => ({ ...(d.data() as MatchProfile), uid: d.id })).filter(p => p.uid !== currentUser.id && !blockedIds.has(p.uid)));
       setRequests(requestsSnap.docs.map(d => ({ ...(d.data() as MatchRequest), id: d.id })));
+      setOutgoingRequests(outgoingSnap.docs.map(d => ({ ...(d.data() as MatchRequest), id: d.id })));
       if (!mineSnap.empty) {
         const mine = mineSnap.docs[0].data() as MatchProfile & { orientation?: string };
         setEnabled(!!mine.opted_in);
@@ -57,7 +60,6 @@ export const SeeYourMatchPage: React.FC = () => {
 
   const savePreferences = async () => {
     if (!currentUser) return;
-    if (focus.length === 0) { setNotice('Choose at least one relationship focus.'); return; }
     if (!isAdultByBirthYear && !adultConfirmed) { setNotice('This section is for adults 18+. Confirm your age and add your birth year in account settings.'); return; }
     setSaving(true); setNotice('');
     try {
@@ -140,7 +142,7 @@ export const SeeYourMatchPage: React.FC = () => {
       <label className="flex items-start gap-3 rounded-xl border border-[#3A2D4C] p-3"><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} className="mt-1 accent-fuchsia-500" /><span><strong className="block text-sm">Enable See Your Match</strong><span className="text-xs text-[#B9B0C6]">When off, your match profile is not shown in discovery.</span></span></label>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2 text-sm"><label className="block font-medium" htmlFor="match-orientation">Sexual orientation (optional)</label><select id="match-orientation" className={control} value={orientation} onChange={e => setOrientation(e.target.value)}><option value="">Prefer not to share</option>{ORIENTATION_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}</select><label className="flex items-center gap-2 pt-1 text-xs text-[#B9B0C6]"><input type="checkbox" checked={showOrientation} onChange={e => setShowOrientation(e.target.checked)} className="accent-fuchsia-500" />Show my orientation to other opted-in members</label></div>
-        <div className="space-y-2 text-sm"><span className="block font-medium">Relationship focus</span><div className="grid gap-2">{FOCUS_OPTIONS.map(item => <label key={item} className="flex items-center gap-2 text-sm text-[#D2C8DE]"><input type="checkbox" checked={focus.includes(item)} onChange={e => setFocus(prev => e.target.checked ? [...prev, item] : prev.filter(v => v !== item))} className="accent-fuchsia-500" />{item}</label>)}</div></div>
+        <div className="space-y-2 text-sm"><span className="block font-medium">Relationship focus (optional)</span><div className="grid gap-2">{FOCUS_OPTIONS.map(item => <label key={item} className="flex items-center gap-2 text-sm text-[#D2C8DE]"><input type="checkbox" checked={focus.includes(item)} onChange={e => setFocus(prev => e.target.checked ? [...prev, item] : prev.filter(v => v !== item))} className="accent-fuchsia-500" />{item}</label>)}</div></div>
       </div>
       {!isAdultByBirthYear && <label className="flex items-start gap-2 text-xs text-[#D2C8DE]"><input type="checkbox" checked={adultConfirmed} onChange={e => setAdultConfirmed(e.target.checked)} className="mt-0.5 accent-fuchsia-500" /><span>I confirm I am 18 or older. I understand this checkbox is a self-attestation; BiCircle must implement age verification before production launch.</span></label>}
       <button onClick={savePreferences} disabled={saving} className="rounded-xl bg-gradient-to-r from-[#9B5CFF] to-[#F05AA6] px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving ? 'Saving…' : 'Save preferences'}</button>
@@ -157,6 +159,7 @@ export const SeeYourMatchPage: React.FC = () => {
     </section>
 
     <section className={panel + ' space-y-3'}><h2 className="text-lg font-bold">Requests sent to you</h2>{requests.length === 0 && <p className="text-sm text-[#B9B0C6]">No incoming match requests.</p>}{requests.filter(r => r.status === 'pending').map(request => <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#3A2D4C] p-3"><span className="text-sm">{request.sender_name || 'A member'} expressed interest</span><div className="flex gap-2"><button onClick={() => void respond(request, 'accepted')} className="flex items-center gap-1 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-semibold"><Check className="h-3.5 w-3.5" /> Accept</button><button onClick={() => void respond(request, 'declined')} className="flex items-center gap-1 rounded-lg border border-[#49364E] px-3 py-2 text-xs"><X className="h-3.5 w-3.5" /> Decline</button></div></div>)}</section>
+    <section className={panel + ' space-y-3'}><h2 className="text-lg font-bold">Your sent interest</h2>{outgoingRequests.length === 0 && <p className="text-sm text-[#B9B0C6]">You have not expressed interest in anyone yet.</p>}{outgoingRequests.map(request => <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#3A2D4C] p-3"><span className="text-sm">Request to {request.recipient_name || 'a member'}</span><span className={request.status === 'accepted' ? 'rounded-full bg-emerald-900/60 px-2.5 py-1 text-xs text-emerald-200' : 'rounded-full bg-[#342345] px-2.5 py-1 text-xs text-purple-200'}>{request.status === 'accepted' ? 'Mutual interest confirmed' : request.status === 'declined' ? 'Declined' : 'Waiting for response'}</span></div>)}</section>
     <p className="px-1 text-xs leading-5 text-[#9D91AA]">Safety: you can block or report any profile. Orientation is sensitive personal information; share only what you choose. Age self-attestation is not verification, and Firebase rules/emulator tests plus real age-assurance and abuse-prevention review are required before launch.</p>
   </div>;
 };
