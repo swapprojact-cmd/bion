@@ -196,6 +196,56 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Opt-in relationship discovery is kept separate from community profiles.
+    // Sexual orientation is only stored in a readable discovery document when the
+    // member explicitly chooses to show it; Firestore rules cannot hide individual fields.
+    match /relationship_profiles/{userId} {
+      function notBlockedBetween(a, b) {
+        return !exists(/databases/$(database)/documents/blocks/$(a + '_' + b))
+          && !exists(/databases/$(database)/documents/blocks/$(b + '_' + a));
+      }
+      allow read: if self(userId)
+        || (signedIn() && resource.data.opted_in == true && notBlockedBetween(request.auth.uid, userId));
+      allow create: if self(userId)
+        && request.resource.data.uid == userId
+        && request.resource.data.opted_in is bool
+        && request.resource.data.focus is list
+        && request.resource.data.adult_confirmed == true;
+      allow update: if self(userId)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.adult_confirmed == true;
+      allow delete: if self(userId);
+    }
+
+    // Interest is a request, not a connection. Only the recipient can accept/decline.
+    match /match_requests/{requestId} {
+      function participants() {
+        return signedIn() && (resource.data.sender_id == request.auth.uid
+          || resource.data.recipient_id == request.auth.uid);
+      }
+      allow read: if participants();
+      allow create: if signedIn()
+        && request.resource.data.sender_id == request.auth.uid
+        && request.resource.data.recipient_id is string
+        && request.resource.data.recipient_id != request.auth.uid
+        && requestId == request.auth.uid + '_' + request.resource.data.recipient_id
+        && request.resource.data.status == 'pending'
+        && exists(/databases/$(database)/documents/relationship_profiles/$(request.auth.uid))
+        && get(/databases/$(database)/documents/relationship_profiles/$(request.auth.uid)).data.opted_in == true
+        && exists(/databases/$(database)/documents/relationship_profiles/$(request.resource.data.recipient_id))
+        && get(/databases/$(database)/documents/relationship_profiles/$(request.resource.data.recipient_id)).data.opted_in == true
+        && !exists(/databases/$(database)/documents/blocks/$(request.auth.uid + '_' + request.resource.data.recipient_id))
+        && !exists(/databases/$(database)/documents/blocks/$(request.resource.data.recipient_id + '_' + request.auth.uid));
+      allow update: if signedIn()
+        && resource.data.recipient_id == request.auth.uid
+        && resource.data.status == 'pending'
+        && request.resource.data.sender_id == resource.data.sender_id
+        && request.resource.data.recipient_id == resource.data.recipient_id
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updated_at'])
+        && request.resource.data.status in ['accepted', 'declined'];
+      allow delete: if participants();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
