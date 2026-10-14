@@ -1,66 +1,192 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isAuthenticated() {
-      return request.auth != null;
+    function signedIn() { return request.auth != null; }
+    function self(uid) { return signedIn() && request.auth.uid == uid; }
+    function moderator() { return signedIn() && (request.auth.token.moderator == true || request.auth.token.admin == true); }
+    function admin() { return signedIn() && request.auth.token.admin == true; }
+    function owns(field) { return signedIn() && resource.data[field] == request.auth.uid; }
+    function createsAs(field) { return signedIn() && request.resource.data[field] == request.auth.uid; }
+    function memberOfGroup(groupId) {
+      return signedIn() && exists(/databases/$(database)/documents/group_members/$(groupId + '_' + request.auth.uid));
+    }
+    function conversationMember(conversationId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/conversations/$(conversationId))
+        && request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.member_ids;
     }
 
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-
-    // Profiles: public read, authenticated updates
     match /profiles/{userId} {
-      allow read: if true;
-      allow create, update: if isAuthenticated();
-      allow delete: if false;
+      allow read: if resource.data.visibility == 'public'
+        || (signedIn() && resource.data.visibility == 'members_only')
+        || self(userId) || moderator();
+      allow create: if self(userId)
+        && request.resource.data.id == userId
+        && request.resource.data.is_admin == false
+        && request.resource.data.is_moderator == false;
+      allow update: if self(userId)
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.is_admin == resource.data.is_admin
+        && request.resource.data.is_moderator == resource.data.is_moderator
+        && request.resource.data.status == resource.data.status;
+      allow delete: if admin();
     }
 
-    // Confidential private settings: strictly isolated to owner
     match /user_private/{userId} {
-      allow read, write: if isAuthenticated() && request.auth.uid == userId;
+      allow read: if self(userId) || admin();
+      allow create, update: if self(userId)
+        && request.resource.data.user_id == userId;
+      allow delete: if self(userId) || admin();
     }
 
-    // Groups: public read, authenticated create/update
     match /groups/{groupId} {
-      allow read: if true;
-      allow create, update: if isAuthenticated();
-      allow delete: if false;
+      allow read: if resource.data.visibility == 'public'
+        || (signedIn() && memberOfGroup(groupId)) || moderator();
+      allow create: if signedIn() && request.resource.data.owner_id == request.auth.uid;
+      allow update: if (signedIn() && resource.data.owner_id == request.auth.uid
+          && request.resource.data.owner_id == resource.data.owner_id)
+        || moderator();
+      allow delete: if (signedIn() && resource.data.owner_id == request.auth.uid) || admin();
     }
 
-    // Posts: public read, authenticated writes
+    match /group_members/{membershipId} {
+      allow read: if signedIn() && (
+        resource.data.user_id == request.auth.uid
+        || memberOfGroup(resource.data.group_id)
+        || moderator()
+      );
+      allow create: if signedIn() && request.resource.data.user_id == request.auth.uid
+        && request.resource.data.role == 'member'
+        && request.resource.data.status in ['pending', 'active'];
+      allow update: if moderator()
+        || (signedIn() && resource.data.user_id == request.auth.uid
+          && request.resource.data.user_id == resource.data.user_id
+          && request.resource.data.role == resource.data.role);
+      allow delete: if (signedIn() && resource.data.user_id == request.auth.uid) || moderator();
+    }
+
     match /posts/{postId} {
-      allow read: if true;
-      allow create, update, delete: if isAuthenticated();
+      allow read: if resource.data.visibility == 'public'
+        || (signedIn() && resource.data.visibility == 'group_only' && memberOfGroup(resource.data.group_id))
+        || (signedIn() && resource.data.visibility == 'friends_only' && (
+          resource.data.author_id == request.auth.uid ||
+          exists(/databases/$(database)/documents/friendships/$(resource.data.author_id + '_' + request.auth.uid)) ||
+          exists(/databases/$(database)/documents/friendships/$(request.auth.uid + '_' + resource.data.author_id))
+        ))
+        || (signedIn() && resource.data.visibility == 'private' && resource.data.author_id == request.auth.uid)
+        || moderator();
+      allow create: if createsAs('author_id')
+        && request.resource.data.status == 'published'
+        && request.resource.data.body is string
+        && request.resource.data.body.size() <= 10000;
+      allow update: if owns('author_id')
+        && request.resource.data.author_id == resource.data.author_id
+        && request.resource.data.status == resource.data.status
+        || moderator();
+      allow delete: if owns('author_id') || moderator();
+      match /comments/{commentId} {
+        allow read: if signedIn();
+        allow create: if createsAs('author_id')
+          && request.resource.data.post_id == postId
+          && request.resource.data.body is string
+          && request.resource.data.body.size() <= 4000;
+        allow update: if owns('author_id')
+          && request.resource.data.author_id == resource.data.author_id || moderator();
+        allow delete: if owns('author_id') || moderator();
+      }
     }
 
-    // Comments: public read, authenticated writes
+    // Legacy top-level comments are kept for the existing data service.
     match /comments/{commentId} {
-      allow read: if true;
-      allow create, update, delete: if isAuthenticated();
+      allow read: if signedIn();
+      allow create: if createsAs('author_id') && request.resource.data.body is string
+        && request.resource.data.body.size() <= 4000;
+      allow update: if owns('author_id') && request.resource.data.author_id == resource.data.author_id
+        || moderator();
+      allow delete: if owns('author_id') || moderator();
     }
 
-    // Reports: private to reporter and moderators
+    match /friend_requests/{requestId} {
+      allow read: if signedIn() && (
+        resource.data.sender_id == request.auth.uid || resource.data.receiver_id == request.auth.uid
+      ) || moderator();
+      allow create: if createsAs('sender_id')
+        && request.resource.data.receiver_id is string
+        && request.resource.data.sender_id != request.resource.data.receiver_id;
+      allow update: if signedIn() && resource.data.receiver_id == request.auth.uid
+        && request.resource.data.sender_id == resource.data.sender_id
+        && request.resource.data.receiver_id == resource.data.receiver_id;
+      allow delete: if signedIn() && (
+        resource.data.sender_id == request.auth.uid || resource.data.receiver_id == request.auth.uid
+      ) || moderator();
+    }
+
+    match /friendships/{friendshipId} {
+      allow read: if signedIn() && request.auth.uid in resource.data.user_ids || moderator();
+      allow create: if signedIn() && request.auth.uid in request.resource.data.user_ids
+        && request.resource.data.user_ids is list && request.resource.data.user_ids.size() == 2;
+      allow update: if signedIn() && request.auth.uid in resource.data.user_ids
+        && request.resource.data.user_ids == resource.data.user_ids;
+      allow delete: if signedIn() && request.auth.uid in resource.data.user_ids || moderator();
+    }
+
+    match /blocks/{blockId} {
+      allow read: if signedIn() && resource.data.blocker_id == request.auth.uid;
+      allow create: if createsAs('blocker_id')
+        && request.resource.data.blocked_id is string
+        && request.resource.data.blocked_id != request.auth.uid;
+      allow delete: if owns('blocker_id');
+      allow update: if false;
+    }
+
+    match /conversations/{conversationId} {
+      allow read: if signedIn() && request.auth.uid in resource.data.member_ids;
+      allow create: if signedIn() && request.auth.uid in request.resource.data.member_ids
+        && request.resource.data.member_ids is list
+        && request.resource.data.member_ids.size() >= 2
+        && request.resource.data.member_ids.size() <= 10;
+      allow update: if signedIn() && request.auth.uid in resource.data.member_ids
+        && request.resource.data.member_ids == resource.data.member_ids;
+      allow delete: if admin();
+    }
+
+    match /messages/{messageId} {
+      allow read: if conversationMember(resource.data.conversation_id);
+      allow create: if conversationMember(request.resource.data.conversation_id)
+        && createsAs('sender_id')
+        && request.resource.data.body is string
+        && request.resource.data.body.size() <= 5000;
+      allow update: if false;
+      allow delete: if owns('sender_id') || moderator();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if owns('recipient_id') || moderator();
+      allow create: if signedIn()
+        && request.resource.data.recipient_id is string
+        && request.resource.data.actor_id == request.auth.uid;
+      allow update: if owns('recipient_id')
+        && request.resource.data.recipient_id == resource.data.recipient_id;
+      allow delete: if owns('recipient_id') || moderator();
+    }
+
     match /reports/{reportId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
+      allow create: if createsAs('reporter_id')
+        && request.resource.data.target_id is string
+        && request.resource.data.reason is string;
+      allow read: if owns('reporter_id') || moderator();
+      allow update: if moderator();
+      allow delete: if admin();
+    }
+
+    match /moderation_actions/{actionId} {
+      allow read: if moderator();
+      allow create: if admin() && request.resource.data.actor_id == request.auth.uid;
       allow update, delete: if false;
     }
 
-    // Conversations and messages
-    match /conversations/{conversationId} {
-      allow read, write: if isAuthenticated();
-    }
-    match /messages/{messageId} {
-      allow read, write: if isAuthenticated();
-    }
-
-    // Friendships and friend requests
-    match /friendships/{friendshipId} {
-      allow read, write: if isAuthenticated();
-    }
-    match /friend_requests/{requestId} {
-      allow read, write: if isAuthenticated();
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
