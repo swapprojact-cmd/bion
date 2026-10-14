@@ -7,7 +7,7 @@ import { useAuth } from '../context/AuthContext';
 const FOCUS_OPTIONS = ['Friendship', 'Serious relationship', 'Casual dating', 'Casual sexual connection'] as const;
 const ORIENTATION_OPTIONS = ['Bisexual', 'Pansexual', 'Gay', 'Lesbian', 'Queer', 'Straight', 'Questioning', 'Another identity', 'Prefer not to say'] as const;
 type Focus = typeof FOCUS_OPTIONS[number];
-type MatchProfile = { uid: string; display_name: string; username: string; bio?: string; interests?: string[]; orientation?: string; focus: Focus[]; opted_in: boolean };
+type MatchProfile = { uid: string; display_name: string; username: string; bio?: string; interests?: string[]; orientation?: string; show_orientation?: boolean; focus: Focus[]; opted_in: boolean };
 type MatchRequest = { id: string; sender_id: string; recipient_id: string; status: 'pending' | 'accepted' | 'declined'; sender_name?: string; recipient_name?: string };
 
 const panel = 'rounded-2xl border border-[#2D233D] bg-[#191321] p-5';
@@ -31,12 +31,14 @@ export const SeeYourMatchPage: React.FC = () => {
     if (!currentUser) { setLoading(false); return; }
     setLoading(true);
     try {
-      const [peopleSnap, requestsSnap, mineSnap] = await Promise.all([
+      const [peopleSnap, requestsSnap, mineSnap, blocksSnap] = await Promise.all([
         getDocs(query(collection(db, 'relationship_profiles'), where('opted_in', '==', true))),
         getDocs(query(collection(db, 'match_requests'), where('recipient_id', '==', currentUser.id))),
         getDocs(query(collection(db, 'relationship_profiles'), where('uid', '==', currentUser.id))),
+        getDocs(query(collection(db, 'blocks'), where('blocker_id', '==', currentUser.id))),
       ]);
-      setProfiles(peopleSnap.docs.map(d => ({ ...(d.data() as MatchProfile), uid: d.id })).filter(p => p.uid !== currentUser.id));
+      const blockedIds = new Set(blocksSnap.docs.map(d => String(d.data().blocked_id || '')));
+      setProfiles(peopleSnap.docs.map(d => ({ ...(d.data() as MatchProfile), uid: d.id })).filter(p => p.uid !== currentUser.id && !blockedIds.has(p.uid)));
       setRequests(requestsSnap.docs.map(d => ({ ...(d.data() as MatchRequest), id: d.id })));
       if (!mineSnap.empty) {
         const mine = mineSnap.docs[0].data() as MatchProfile & { orientation?: string };
