@@ -75,7 +75,7 @@ Or deploy all configured resources with firebase deploy. Deploying rules replace
 
 The starter rules use these collections: profiles, user_private, groups, group_members, posts, comments, friend_requests, friendships, blocks, conversations, messages, notifications, reports, and moderation_actions. They intentionally default-deny unknown paths.
 
-- Role grants use Firebase Auth custom claims, not writable profile booleans. Bootstrap the first admin manually with a trusted one-off Admin SDK script or a trusted server environment; never expose an endpoint that lets a user grant themselves a role.
+- Role grants use Firebase Auth custom claims, not writable profile booleans. Bootstrap the first admin with the trusted one-off Admin SDK script above; never expose an endpoint that lets a user grant themselves a role.\n- `deleteOwnAccount` is a callable function that deletes the caller's Auth account and selected top-level documents. Audit it against every collection you add and confirm deletion behavior in a disposable test project before launch.
 - Private report reads and moderation audit reads require admin/moderator claims.
 - Storage upload helpers accept images only; security rules enforce ownership and size limits as a second layer.
 - Firestore rules are not filters. Queries must be constrained so every possible returned document satisfies the corresponding read rule.
