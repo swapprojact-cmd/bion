@@ -8,7 +8,12 @@ service cloud.firestore {
     function owns(field) { return signedIn() && resource.data[field] == request.auth.uid; }
     function createsAs(field) { return signedIn() && request.resource.data[field] == request.auth.uid; }
     function memberOfGroup(groupId) {
-      return signedIn() && exists(/databases/$(database)/documents/group_members/$(groupId + '_' + request.auth.uid));
+      return signedIn() && (
+        exists(/databases/$(database)/documents/group_members/$(groupId + '_' + request.auth.uid))
+        || (exists(/databases/$(database)/documents/groups/$(groupId))
+          && ('memberIds' in get(/databases/$(database)/documents/groups/$(groupId)).data)
+          && request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.memberIds)
+      );
     }
     function conversationMember(conversationId) {
       return signedIn()
@@ -57,11 +62,17 @@ service cloud.firestore {
       );
       allow create: if signedIn() && request.resource.data.user_id == request.auth.uid
         && request.resource.data.role == 'member'
-        && request.resource.data.status in ['pending', 'active'];
+        && exists(/databases/$(database)/documents/groups/$(request.resource.data.group_id))
+        && ((get(/databases/$(database)/documents/groups/$(request.resource.data.group_id)).data.visibility == 'public'
+              && request.resource.data.status == 'active')
+          || (get(/databases/$(database)/documents/groups/$(request.resource.data.group_id)).data.visibility == 'private'
+              && request.resource.data.status == 'pending'));
       allow update: if moderator()
+        || (signedIn() && get(/databases/$(database)/documents/groups/$(resource.data.group_id)).data.owner_id == request.auth.uid)
         || (signedIn() && resource.data.user_id == request.auth.uid
           && request.resource.data.user_id == resource.data.user_id
-          && request.resource.data.role == resource.data.role);
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.status == resource.data.status);
       allow delete: if (signedIn() && resource.data.user_id == request.auth.uid) || moderator();
     }
 
