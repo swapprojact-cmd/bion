@@ -1,0 +1,132 @@
+{
+  "entities": {
+    "Profile": {
+      "title": "Profile",
+      "description": "Public user profile for BiCircle community members",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "display_name": { "type": "string" },
+        "username": { "type": "string" },
+        "avatar_path": { "type": "string" },
+        "bio": { "type": "string" },
+        "interests": { "type": "array" },
+        "pronouns": { "type": "string" },
+        "visibility": { "type": "string", "enum": ["public", "members_only", "private"] },
+        "is_moderator": { "type": "boolean" },
+        "is_admin": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["active", "suspended", "deactivated"] },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "display_name", "username", "visibility", "status"]
+    },
+    "UserPrivate": {
+      "title": "UserPrivate",
+      "description": "Confidential settings and private identity notes",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "account_name": { "type": "string" },
+        "identity_notes": { "type": "string" },
+        "birth_year": { "type": "integer" },
+        "messaging_permission": { "type": "string", "enum": ["everyone", "friends_only", "none"] },
+        "allow_friend_requests": { "type": "boolean" },
+        "email_notifications": { "type": "boolean" },
+        "notify_messages": { "type": "boolean" },
+        "notify_comments": { "type": "boolean" },
+        "notify_friend_requests": { "type": "boolean" }
+      },
+      "required": ["user_id", "messaging_permission"]
+    },
+    "Group": {
+      "title": "Group",
+      "description": "Interest-based circles and support groups",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "owner_id": { "type": "string" },
+        "name": { "type": "string" },
+        "slug": { "type": "string" },
+        "description": { "type": "string" },
+        "topic": { "type": "string" },
+        "rules": { "type": "string" },
+        "visibility": { "type": "string", "enum": ["public", "private"] },
+        "status": { "type": "string", "enum": ["active", "archived", "suspended"] },
+        "member_count": { "type": "integer" }
+      },
+      "required": ["id", "owner_id", "name", "slug", "description", "topic", "visibility"]
+    },
+    "Post": {
+      "title": "Post",
+      "description": "Community discussions and stories",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "author_id": { "type": "string" },
+        "group_id": { "type": "string" },
+        "body": { "type": "string" },
+        "media_paths": { "type": "array" },
+        "visibility": { "type": "string", "enum": ["public", "group_only", "friends_only", "private"] },
+        "status": { "type": "string", "enum": ["published", "hidden", "removed_by_mod"] },
+        "likes_count": { "type": "integer" },
+        "comments_count": { "type": "integer" }
+      },
+      "required": ["id", "author_id", "body", "status"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Replies to community posts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "post_id": { "type": "string" },
+        "author_id": { "type": "string" },
+        "body": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "post_id", "author_id", "body"]
+    },
+    "Report": {
+      "title": "Report",
+      "description": "Trust and safety reports submitted by members",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "reporter_id": { "type": "string" },
+        "target_type": { "type": "string" },
+        "target_id": { "type": "string" },
+        "reason": { "type": "string" },
+        "details": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "reporter_id", "target_type", "target_id", "reason", "status"]
+    }
+  },
+  "firestore": {
+    "/profiles/{userId}": {
+      "schema": { "$ref": "#/entities/Profile" },
+      "description": "Member public profiles"
+    },
+    "/user_private/{userId}": {
+      "schema": { "$ref": "#/entities/UserPrivate" },
+      "description": "Confidential private settings"
+    },
+    "/groups/{groupId}": {
+      "schema": { "$ref": "#/entities/Group" },
+      "description": "Community circles"
+    },
+    "/posts/{postId}": {
+      "schema": { "$ref": "#/entities/Post" },
+      "description": "Feed and group posts"
+    },
+    "/posts/{postId}/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/Comment" },
+      "description": "Post replies"
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/Report" },
+      "description": "Confidential moderation reports"
+    }
+  }
+}

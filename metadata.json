@@ -1,0 +1,6 @@
+{
+  "name": "BiCircle — Bisexual Community Platform",
+  "description": "Find your people. Be yourself. A safe, authentic social community platform for bisexual people focusing on friendship, discussion groups, personal stories, and community support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
