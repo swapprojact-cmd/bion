@@ -22,6 +22,7 @@ import { ModerationPage } from './pages/ModerationPage';
 import { AdminPage } from './pages/AdminPage';
 import { ResourcesPage } from './pages/ResourcesPage';
 import { FindNearbyProfilesPage } from './pages/FindNearbyProfilesPage';
+import { SeeYourMatchPage } from './pages/SeeYourMatchPage';
 
 export default function App() {
   const [currentRoute, setCurrentRoute] = useState<string>(() => {
@@ -77,6 +78,9 @@ export default function App() {
     }
     if (currentRoute === '/reset-password') {
       return <AuthPages mode="reset" navigate={navigate} />;
+    }
+    if (currentRoute === '/see-your-match') {
+      return <SeeYourMatchPage />;
     }
     if (currentRoute === '/feed') {
       return <FeedPage navigate={navigate} />;

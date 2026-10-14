@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Compass, MessageSquare, Bell, User, Radar } from 'lucide-react';
+import { Home, Compass, MessageSquare, Bell, User, Radar, Heart } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useCommunity } from '../../context/CommunityContext';
 
@@ -22,6 +22,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({ currentRoute, navigate }) 
   }> = [
     { label: 'Feed', path: '/feed', icon: Home },
     { label: 'Nearby', path: '/nearby', icon: Radar },
+    { label: 'Match', path: '/see-your-match', icon: Heart },
     { label: 'Circles', path: '/explore', icon: Compass },
     { label: 'Messages', path: '/messages', icon: MessageSquare },
     { label: 'Profile', path: `/members/${currentUser.id}`, icon: User },

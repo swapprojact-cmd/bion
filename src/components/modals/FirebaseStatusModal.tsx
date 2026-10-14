@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
 import { Flame, CheckCircle, Database, ShieldCheck, X, RefreshCw, HardDrive, Lock } from 'lucide-react';
-import { db, validateFirestoreConnection } from '../../lib/firebase';
+import { db, firebaseConfig, databaseId, validateFirestoreConnection } from '../../lib/firebase';
 import { store } from '../../lib/dataService';
 import { doc, setDoc } from 'firebase/firestore';
-import firebaseConfig from '../../../firebase-applet-config.json';
 
 interface FirebaseStatusModalProps {
   isOpen: boolean;
@@ -96,7 +95,7 @@ export const FirebaseStatusModal: React.FC<FirebaseStatusModalProps> = ({ isOpen
             <div>
               <div className="text-sm font-semibold text-white">Firestore Live & Active</div>
               <div className="text-xs text-[#B9B0C6] font-mono">
-                {firebaseConfig.firestoreDatabaseId}
+                {databaseId}
               </div>
             </div>
           </div>

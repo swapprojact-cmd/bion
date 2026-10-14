@@ -9,7 +9,7 @@ interface AuthPagesProps {
 }
 
 export const AuthPages: React.FC<AuthPagesProps> = ({ mode, navigate }) => {
-  const { login, signup, switchDemoAccount } = useAuth();
+  const { login, signup } = useAuth();
 
   // Form states
   const [email, setEmail] = useState('');
@@ -394,61 +394,6 @@ export const AuthPages: React.FC<AuthPagesProps> = ({ mode, navigate }) => {
           </form>
         )}
 
-        {/* QUICK DEMO LOGIN SHORTCUTS */}
-        <div className="mt-8 pt-6 border-t border-[#2D233D] space-y-2">
-          <div className="text-[11px] font-semibold uppercase tracking-wider text-[#B9B0C6] text-center">
-            One-Click Reviewer Logins
-          </div>
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <button
-              type="button"
-              onClick={() => {
-                switchDemoAccount('usr_maya');
-                navigate('/feed');
-              }}
-              className="p-2 rounded-xl bg-[#0E0B13] border border-[#2D233D] hover:border-[#9B5CFF] text-left transition-colors cursor-pointer"
-            >
-              <div className="font-semibold text-white">Maya Lin</div>
-              <div className="text-[10px] text-purple-400">Admin & Mod</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                switchDemoAccount('usr_jordan');
-                navigate('/feed');
-              }}
-              className="p-2 rounded-xl bg-[#0E0B13] border border-[#2D233D] hover:border-[#9B5CFF] text-left transition-colors cursor-pointer"
-            >
-              <div className="font-semibold text-white">Jordan Rivera</div>
-              <div className="text-[10px] text-emerald-400">Member (Tech/Cycling)</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                switchDemoAccount('usr_alex');
-                navigate('/feed');
-              }}
-              className="p-2 rounded-xl bg-[#0E0B13] border border-[#2D233D] hover:border-[#9B5CFF] text-left transition-colors cursor-pointer"
-            >
-              <div className="font-semibold text-white">Alex Thorne</div>
-              <div className="text-[10px] text-purple-400">Parent Circle Mod</div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                switchDemoAccount('usr_samira');
-                navigate('/feed');
-              }}
-              className="p-2 rounded-xl bg-[#0E0B13] border border-[#2D233D] hover:border-[#9B5CFF] text-left transition-colors cursor-pointer"
-            >
-              <div className="font-semibold text-white">Samira Patel</div>
-              <div className="text-[10px] text-blue-400">Member (STEM Lead)</div>
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );

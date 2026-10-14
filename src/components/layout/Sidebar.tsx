@@ -14,6 +14,7 @@ import {
   SlidersHorizontal,
   BookOpen,
   Radar,
+  Heart,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useCommunity } from '../../context/CommunityContext';
@@ -32,6 +33,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentRoute, navigate }) => {
   const navItems = [
     { label: 'Community Feed', path: '/feed', icon: Home },
     { label: 'Find Nearby Profiles', path: '/nearby', icon: Radar },
+    { label: 'See Your Match', path: '/see-your-match', icon: Heart },
     { label: 'Explore Circles', path: '/explore', icon: Compass },
     { label: 'My Groups', path: '/groups', icon: Users2 },
     { label: 'Resource Library', path: '/resources', icon: BookOpen },

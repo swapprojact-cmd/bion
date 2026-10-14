@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
 import { Profile, UserPrivate } from '../types';
 import { DataService, store } from '../lib/dataService';
 import { auth, db } from '../lib/firebase';
@@ -31,61 +32,57 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [firebaseConnected, setFirebaseConnected] = useState<boolean>(true);
 
   useEffect(() => {
-    const init = async () => {
+    // Firebase Auth is the source of truth; never restore a session from a client-controlled user ID.
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setIsLoading(true);
-      // Load current user from stored ID if session exists
-      const storedUserId = localStorage.getItem('bicircle_current_user_id');
-      if (storedUserId) {
-        const prof = await DataService.getProfileById(storedUserId);
-        if (prof) {
-          setCurrentUser(prof);
-          const priv = await DataService.getUserPrivate(prof.id);
-          setUserPrivate(priv);
+      try {
+        if (!firebaseUser) {
+          setCurrentUser(null);
+          setUserPrivate(null);
+          if (typeof window !== 'undefined') localStorage.removeItem('bicircle_current_user_id');
+          return;
         }
-      } else {
+        const prof = await DataService.getProfileById(firebaseUser.uid);
+        if (!prof) {
+          setCurrentUser(null);
+          setUserPrivate(null);
+          console.error('Authenticated Firebase user has no matching Firestore profile.');
+          return;
+        }
+        setCurrentUser(prof);
+        const priv = await DataService.getUserPrivate(firebaseUser.uid);
+        setUserPrivate(priv);
+        if (typeof window !== 'undefined') localStorage.setItem('bicircle_current_user_id', firebaseUser.uid);
+      } catch (error) {
+        console.error('Unable to load the signed-in Firebase profile:', error);
         setCurrentUser(null);
         setUserPrivate(null);
+      } finally {
+        setIsLoading(false);
       }
-      setIsLoading(false);
-    };
-
-    init();
+    });
+    return unsubscribe;
   }, []);
 
   const login = async (email: string, pass: string) => {
     setIsLoading(true);
     try {
-      // 1. Try Firebase Auth if valid email format
-      if (email.includes('@') && pass.length >= 6) {
-        try {
-          const userCredential = await signInWithEmailAndPassword(auth, email, pass);
-          if (userCredential.user) {
-            const prof = await DataService.getProfileById(userCredential.user.uid);
-            if (prof) {
-              setCurrentUser(prof);
-              localStorage.setItem('bicircle_current_user_id', prof.id);
-              const priv = await DataService.getUserPrivate(prof.id);
-              setUserPrivate(priv);
-              return { success: true };
-            }
-          }
-        } catch {
-          // Fall through to demo matching
-        }
+      if (!email.includes('@') || pass.length < 6) {
+        return { success: false, error: 'Enter a valid email and password.' };
       }
-
-      // 2. Demo accounts or username login
-      const found = store.profiles.find(
-        p => p.username.toLowerCase() === email.toLowerCase() || email.includes(p.username)
-      );
-      const target = found || store.profiles[0];
-      setCurrentUser(target);
-      localStorage.setItem('bicircle_current_user_id', target.id);
-      const priv = await DataService.getUserPrivate(target.id);
+      const credential = await signInWithEmailAndPassword(auth, email.trim(), pass);
+      const prof = await DataService.getProfileById(credential.user.uid);
+      if (!prof) {
+        await signOut(auth);
+        return { success: false, error: 'Your account has no BiCircle profile yet. Please contact support.' };
+      }
+      setCurrentUser(prof);
+      const priv = await DataService.getUserPrivate(prof.id);
       setUserPrivate(priv);
+      if (typeof window !== 'undefined') localStorage.setItem('bicircle_current_user_id', prof.id);
       return { success: true };
     } catch (e: any) {
-      return { success: false, error: e.message || 'Login failed' };
+      return { success: false, error: e.code === 'auth/invalid-credential' ? 'Email or password is incorrect.' : (e.message || 'Login failed') };
     } finally {
       setIsLoading(false);
     }
@@ -94,24 +91,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signup = async (data: { email: string; pass: string; displayName: string; username: string; birthYear?: number }) => {
     setIsLoading(true);
     try {
-      let uid = 'usr_' + Date.now();
-
-      // Register with Firebase Auth if valid email & password
-      if (data.email.includes('@') && data.pass.length >= 6) {
-        try {
-          const res = await createUserWithEmailAndPassword(auth, data.email, data.pass);
-          if (res.user) {
-            uid = res.user.uid;
-          }
-        } catch {
-          // If already exists or in offline dev, generate safe uid
-        }
+      const email = data.email.trim().toLowerCase();
+      const displayName = data.displayName.trim();
+      const username = data.username.toLowerCase().replace(/[^a-z0-9_]/g, '');
+      if (!email.includes('@') || data.pass.length < 8 || !displayName || username.length < 3) {
+        return { success: false, error: 'Use a valid email, a password of at least 8 characters, a display name, and a username of at least 3 characters.' };
       }
 
+      const credential = await createUserWithEmailAndPassword(auth, email, data.pass);
+      const uid = credential.user.uid;
+      const now = new Date().toISOString();
       const newProfile: Profile = {
         id: uid,
-        display_name: data.displayName,
-        username: data.username.toLowerCase().replace(/[^a-z0-9_]/g, ''),
+        display_name: displayName,
+        username,
         bio: 'New member in BiCircle community.',
         interests: ['Community', 'Friendship'],
         pronouns: 'they/them',
@@ -119,14 +112,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         is_moderator: false,
         is_admin: false,
         status: 'active',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        created_at: now,
+        updated_at: now,
       };
-
-      store.profiles.push(newProfile);
-      store.userPrivateMap[uid] = {
+      const privateProfile: UserPrivate = {
         user_id: uid,
-        account_name: data.email,
+        account_name: email,
         birth_year: data.birthYear || null,
         messaging_permission: 'everyone',
         allow_friend_requests: true,
@@ -134,26 +125,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         notify_messages: true,
         notify_comments: true,
         notify_friend_requests: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        created_at: now,
+        updated_at: now,
       };
+      // Fail signup if Firestore profile creation fails; do not create a local fake account.
+      await setDoc(doc(db, 'profiles', uid), newProfile);
+      await setDoc(doc(db, 'user_private', uid), privateProfile);
+      // Keep the current legacy data service's local cache in sync while its full
+      // Firestore migration is pending; this cache is not an authentication source.
+      store.profiles = store.profiles.filter(profile => profile.id !== uid);
+      store.profiles.push(newProfile);
+      store.userPrivateMap[uid] = privateProfile;
       store.save();
-
-      // Write to Firebase Firestore
-      try {
-        await setDoc(doc(db, 'profiles', uid), newProfile, { merge: true });
-        await setDoc(doc(db, 'user_private', uid), store.userPrivateMap[uid], { merge: true });
-      } catch (e) {
-        console.warn('Firestore initial user write:', e);
-      }
-
       setCurrentUser(newProfile);
-      setUserPrivate(store.userPrivateMap[uid]);
-      localStorage.setItem('bicircle_current_user_id', uid);
-
+      setUserPrivate(privateProfile);
+      if (typeof window !== 'undefined') localStorage.setItem('bicircle_current_user_id', uid);
       return { success: true };
     } catch (e: any) {
-      return { success: false, error: e.message || 'Signup failed' };
+      return { success: false, error: e.code === 'auth/email-already-in-use' ? 'An account already exists for this email.' : (e.message || 'Signup failed') };
     } finally {
       setIsLoading(false);
     }
@@ -170,14 +159,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('bicircle_current_user_id');
   };
 
-  const switchDemoAccount = async (userId: string) => {
-    const prof = await DataService.getProfileById(userId);
-    if (prof) {
-      setCurrentUser(prof);
-      localStorage.setItem('bicircle_current_user_id', prof.id);
-      const priv = await DataService.getUserPrivate(prof.id);
-      setUserPrivate(priv);
-    }
+  // Demo account switching is intentionally disabled in Firebase-only mode.
+  const switchDemoAccount = async (_userId: string) => {
+    console.warn('Demo account switching is disabled. Sign in with Firebase Authentication.');
   };
 
   const updateCurrentProfile = async (updates: Partial<Profile>) => {
@@ -192,12 +176,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUserPrivate(updated);
   };
 
+  // Demo reset must never authenticate a user or grant client-side privileges.
   const resetAllDemoData = () => {
     store.resetToDefault();
-    const maya = store.profiles[0];
-    setCurrentUser(maya);
-    setUserPrivate(store.userPrivateMap[maya.id]);
-    localStorage.setItem('bicircle_current_user_id', maya.id);
+    console.info('Local demo data was reset. Firebase Auth session and server data were not changed.');
   };
 
   return (
