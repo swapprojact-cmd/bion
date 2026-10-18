@@ -86,7 +86,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentRoute, navigate }) => {
               {/* Messages Icon */}
               <button
                 onClick={() => navigate('/messages')}
-                className={`relative p-2 rounded-xl text-[#B9B0C6] hover:text-white hover:bg-[#191321] border border-transparent hover:border-[#2D233D] transition-colors cursor-pointer ${
+                className={`hidden sm:inline-flex relative p-2 rounded-xl text-[#B9B0C6] hover:text-white hover:bg-[#191321] border border-transparent hover:border-[#2D233D] transition-colors cursor-pointer ${
                   currentRoute.startsWith('/messages') ? 'text-[#9B5CFF] bg-[#191321] border-[#2D233D]' : ''
                 }`}
                 title="Direct Messages"
