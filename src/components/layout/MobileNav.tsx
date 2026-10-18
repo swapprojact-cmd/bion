@@ -8,13 +8,20 @@ interface MobileNavProps {
   navigate: (route: string) => void;
 }
 
+type MobileNavItem = {
+  label: string;
+  path: string;
+  icon: React.ComponentType<{ className?: string }>;
+  badge?: number;
+};
+
 export const MobileNav: React.FC<MobileNavProps> = ({ currentRoute, navigate }) => {
   const { currentUser } = useAuth();
   const { unreadNotifsCount } = useCommunity();
 
   if (!currentUser) return null;
 
-  const items = [
+  const items: MobileNavItem[] = [
     { label: 'Home', path: '/feed', icon: Home },
     { label: 'Explore', path: '/explore', icon: Compass },
     { label: 'Messages', path: '/messages', icon: MessageSquare },
@@ -47,9 +54,9 @@ export const MobileNav: React.FC<MobileNavProps> = ({ currentRoute, navigate }) 
             >
               <span className="relative">
                 <Icon className="h-5 w-5" aria-hidden="true" />
-                {item.label === 'Alerts' && item.badge > 0 && (
+                {item.label === 'Alerts' && (item.badge ?? 0) > 0 && (
                   <span className="absolute -right-2 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#F05AA6] px-1 text-[9px] font-bold text-white">
-                    {item.badge > 9 ? '9+' : item.badge}
+                    {(item.badge ?? 0) > 9 ? '9+' : item.badge}
                   </span>
                 )}
               </span>
