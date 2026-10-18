@@ -89,9 +89,9 @@ export const FeedPage: React.FC<FeedPageProps> = ({ navigate }) => {
   });
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 py-4">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-6 py-2 sm:py-4">
       {/* Main Feed Column */}
-      <div className="lg:col-span-2 space-y-5">
+      <div className="lg:col-span-2 min-w-0 space-y-3 sm:space-y-5">
         {/* Real GPS Location Prompt Banner */}
         <LocationPermissionBanner
           onLocationUpdate={(c) => {
@@ -134,7 +134,7 @@ export const FeedPage: React.FC<FeedPageProps> = ({ navigate }) => {
         )}
 
         {/* Top Social Stories / Nearby Members Spotlight Carousel */}
-        <div className="bg-[#191321] border border-[#2D233D] rounded-2xl p-4 shadow-sm space-y-3">
+        <div className="hidden sm:block bg-[#191321] border border-[#2D233D] rounded-2xl p-4 shadow-sm space-y-3">
           <div className="flex items-center justify-between text-xs">
             <span className="font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
               <Radar className="w-3.5 h-3.5 text-[#9B5CFF] animate-pulse" />
@@ -222,12 +222,12 @@ export const FeedPage: React.FC<FeedPageProps> = ({ navigate }) => {
         )}
 
         {/* Social Feed Navigation Channels */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pb-1 border-b border-[#2D233D]/60 pt-1">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center sm:justify-between gap-2 sm:gap-3 pb-2 sm:pb-1 border-b border-[#2D233D]/60 pt-1">
           {/* Feed Channel Tabs */}
-          <div className="flex items-center gap-1 bg-[#191321] p-1 rounded-xl border border-[#2D233D]">
+          <div className="flex w-full sm:w-auto items-center gap-1 bg-[#191321] p-1 rounded-xl border border-[#2D233D] overflow-x-auto">
             <button
               onClick={() => setFeedChannel('all')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+              className={`flex shrink-0 items-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                 feedChannel === 'all'
                   ? 'bg-[#0E0B13] text-white shadow-sm'
                   : 'text-[#B9B0C6] hover:text-white'
@@ -264,7 +264,7 @@ export const FeedPage: React.FC<FeedPageProps> = ({ navigate }) => {
           </div>
 
           {/* Sort Toggles: Latest / Popular */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between sm:justify-end gap-2">
             {feedChannel === 'nearby' && !gpsActive && (
               <button
                 onClick={handleActivateGps}
@@ -327,7 +327,7 @@ export const FeedPage: React.FC<FeedPageProps> = ({ navigate }) => {
             ))}
           </div>
         ) : filteredPosts.length === 0 ? (
-          <div className="p-12 rounded-2xl bg-[#191321] border border-[#2D233D] text-center space-y-3">
+          <div className="p-6 sm:p-12 rounded-2xl bg-[#191321] border border-[#2D233D] text-center space-y-3">
             <HeartHandshake className="w-10 h-10 text-[#9B5CFF] mx-auto opacity-70" />
             <h3 className="text-base font-bold text-white">
               {feedChannel === 'nearby'
@@ -341,7 +341,7 @@ export const FeedPage: React.FC<FeedPageProps> = ({ navigate }) => {
             </p>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-3 sm:space-y-4">
             {filteredPosts.map((post) => (
               <PostCard
                 key={post.id}
