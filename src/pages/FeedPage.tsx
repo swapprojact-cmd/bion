@@ -100,6 +100,45 @@ export const FeedPage: React.FC<FeedPageProps> = ({ navigate }) => {
           }}
         />
 
+        {/* Mobile-first welcome panel: a clear starting point instead of a crowded dashboard. */}
+        <section className="relative isolate overflow-hidden rounded-3xl border border-[#9B5CFF]/30 bg-gradient-to-br from-[#281746] via-[#191321] to-[#30152C] p-5 sm:p-6 shadow-lg shadow-[#09060F]/30">
+          <div aria-hidden="true" className="pointer-events-none absolute -right-8 -top-10 h-36 w-36 rounded-full bg-[#9B5CFF]/15 blur-2xl" />
+          <div aria-hidden="true" className="pointer-events-none absolute -bottom-12 right-20 h-32 w-32 rounded-full bg-[#F05AA6]/10 blur-2xl" />
+          <div className="relative">
+            <p className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-[#D5BFFF]">
+              <HeartHandshake className="h-4 w-4" aria-hidden="true" />
+              Your community, your pace
+            </p>
+            <h1 className="max-w-xl text-2xl sm:text-3xl font-bold leading-tight tracking-tight text-white">
+              {currentUser ? `Welcome back, ${currentUser.display_name?.split(' ')[0] || 'friend'}.` : 'Find your people in BiCircle.'}
+            </h1>
+            <p className="mt-2 max-w-xl text-sm leading-relaxed text-[#D0C5DD]">
+              Share a thought, discover a circle, or join a conversation. A friendly space to connect and belong.
+            </p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              {currentUser ? (
+                <>
+                  <button type="button" onClick={() => navigate('/explore')} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-[#281746] shadow-sm transition hover:bg-[#F4ECFF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">
+                    <Compass className="h-4 w-4" aria-hidden="true" /> Explore circles
+                  </button>
+                  <button type="button" onClick={() => navigate('/messages')} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">
+                    <Users className="h-4 w-4" aria-hidden="true" /> Meet the community
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" onClick={() => navigate('/signup')} className="inline-flex min-h-11 items-center justify-center rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-[#281746] shadow-sm transition hover:bg-[#F4ECFF] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">
+                    Join BiCircle
+                  </button>
+                  <button type="button" onClick={() => navigate('/login')} className="inline-flex min-h-11 items-center justify-center rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white">
+                    Sign in
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </section>
+
         {/* Visitor Access Mode Notice */}
         {!currentUser && (
           <div className="p-4 rounded-2xl bg-gradient-to-r from-[#191321] via-[#241738] to-[#191321] border border-[#9B5CFF]/30 text-white flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
@@ -197,7 +236,17 @@ export const FeedPage: React.FC<FeedPageProps> = ({ navigate }) => {
 
         {/* Post Creation */}
         {currentUser ? (
-          <CreatePostCard onPostCreated={() => {}} />
+          <section className="overflow-hidden rounded-2xl border border-[#9B5CFF]/25 bg-[#15101D] p-1">
+            <div className="flex items-center gap-2 px-3 pt-3 pb-1 sm:px-4">
+              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-[#9B5CFF] to-[#F05AA6] text-white">
+                <Sparkles className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <div>
+                <h2 className="text-sm font-bold text-white">What’s on your mind?</h2>
+                <p className="text-[11px] text-[#B9B0C6]">Share a moment with your community</p>
+              </div>
+            </div>
+            <CreatePostCard onPostCreated={() => {}} />
         ) : (
           <div className="p-5 rounded-2xl bg-[#191321] border border-[#2D233D] text-center space-y-2">
             <h3 className="text-sm font-bold text-white">Join the BiCircle Community</h3>
