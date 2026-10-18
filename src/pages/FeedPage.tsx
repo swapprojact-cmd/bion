@@ -247,6 +247,7 @@ export const FeedPage: React.FC<FeedPageProps> = ({ navigate }) => {
               </div>
             </div>
             <CreatePostCard onPostCreated={() => {}} />
+          </section>
         ) : (
           <div className="p-5 rounded-2xl bg-[#191321] border border-[#2D233D] text-center space-y-2">
             <h3 className="text-sm font-bold text-white">Join the BiCircle Community</h3>
