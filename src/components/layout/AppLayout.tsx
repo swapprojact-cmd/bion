@@ -18,19 +18,19 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 }) => {
   const { currentUser } = useAuth();
 
-  // Landing, auth, legal pages can have full width without sidebar if desired, but providing the sidebar for authenticated users gives consistent shell
+  // Keep public and authentication pages focused; authenticated pages get the desktop sidebar.
   const isAuthOrLanding = currentRoute === '/' || currentRoute === '/login' || currentRoute === '/signup' || currentRoute === '/forgot-password' || currentRoute === '/reset-password';
   const showSidebar = !!currentUser && !isAuthOrLanding;
 
   return (
-    <div className="min-h-screen bg-[#0E0B13] text-[#F8F5FC] flex flex-col selection:bg-[#9B5CFF]/30 selection:text-[#F8F5FC]">
+    <div className="min-h-screen overflow-x-clip bg-[#0E0B13] text-[#F8F5FC] flex flex-col selection:bg-[#9B5CFF]/30 selection:text-[#F8F5FC]">
       <Navbar currentRoute={currentRoute} navigate={navigate} />
 
-      <div className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 flex">
+      <div className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 flex">
         {showSidebar && (
           <Sidebar currentRoute={currentRoute} navigate={navigate} />
         )}
-        <main className={`flex-1 min-w-0 pb-20 lg:pb-8 ${showSidebar ? 'lg:pl-6' : ''}`}>
+        <main className={'flex-1 min-w-0 pb-24 lg:pb-8 ' + (showSidebar ? 'lg:pl-6' : '')}>
           {children}
         </main>
       </div>
