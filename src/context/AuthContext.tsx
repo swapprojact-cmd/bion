@@ -13,7 +13,7 @@ interface AuthContextType {
   isLoading: boolean;
   isModerator: boolean;
   isAdmin: boolean;
-  firebaseConnected: boolean;
+  firebaseConnected: boolean | null;
   login: (email: string, pass: string) => Promise<{ success: boolean; error?: string }>;
   signup: (data: { email: string; pass: string; displayName: string; username: string; birthYear?: number }) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
@@ -29,7 +29,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [userPrivate, setUserPrivate] = useState<UserPrivate | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [firebaseConnected, setFirebaseConnected] = useState<boolean>(false);
+  const [firebaseConnected, setFirebaseConnected] = useState<boolean | null>(null);
 
   useEffect(() => {
     let mounted = true;
