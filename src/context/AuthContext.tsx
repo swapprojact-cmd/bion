@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { Profile, UserPrivate } from '../types';
 import { DataService, store } from '../lib/dataService';
-import { auth, db } from '../lib/firebase';
+import { auth, db, validateFirestoreConnection } from '../lib/firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, setDoc } from 'firebase/firestore';
 
@@ -29,9 +29,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [userPrivate, setUserPrivate] = useState<UserPrivate | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [firebaseConnected, setFirebaseConnected] = useState<boolean>(true);
+  const [firebaseConnected, setFirebaseConnected] = useState<boolean>(false);
 
   useEffect(() => {
+    let mounted = true;
+
+    void validateFirestoreConnection().then(connected => {
+      if (mounted) setFirebaseConnected(connected);
+    });
+
     // Firebase Auth is the source of truth; never restore a session from a client-controlled user ID.
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setIsLoading(true);
@@ -42,6 +48,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (typeof window !== 'undefined') localStorage.removeItem('bicircle_current_user_id');
           return;
         }
+
         const prof = await DataService.getProfileById(firebaseUser.uid);
         if (!prof) {
           setCurrentUser(null);
@@ -49,19 +56,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           console.error('Authenticated Firebase user has no matching Firestore profile.');
           return;
         }
+
         setCurrentUser(prof);
         const priv = await DataService.getUserPrivate(firebaseUser.uid);
         setUserPrivate(priv);
         if (typeof window !== 'undefined') localStorage.setItem('bicircle_current_user_id', firebaseUser.uid);
       } catch (error) {
-        console.error('Unable to load the signed-in Firebase profile:', error);
+        console.error('Unable to load signed-in Firebase account data:', error);
         setCurrentUser(null);
         setUserPrivate(null);
       } finally {
         setIsLoading(false);
       }
     });
-    return unsubscribe;
+
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
   }, []);
 
   const login = async (email: string, pass: string) => {
