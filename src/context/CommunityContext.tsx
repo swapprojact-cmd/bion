@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   Post,
   Comment,
@@ -17,8 +17,9 @@ import {
   ModerationActionType,
   Visibility,
 } from '../types';
-import { DataService } from '../lib/dataService';
+import { DataService, clearDataSessionCache } from '../lib/dataService';
 import { useAuth } from './AuthContext';
+import { auth } from '../lib/firebase';
 
 interface CommunityContextType {
   posts: Post[];
@@ -105,9 +106,40 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [moderationActions, setModerationActions] = useState<ModerationAction[]>([]);
   const [sortFeed, setSortFeed] = useState<'latest' | 'popular'>('latest');
   const [isLoadingFeed, setIsLoadingFeed] = useState<boolean>(false);
+  const lastLoadedUid = useRef<string | null>(null);
+  const refreshGeneration = useRef(0);
+
+  const clearCommunityState = () => {
+    setPosts([]);
+    setGroups([]);
+    setFriends([]);
+    setIncomingRequests([]);
+    setOutgoingRequests([]);
+    setConversations([]);
+    setNotifications([]);
+    setBlockedUsers([]);
+    setReports([]);
+    setModerationActions([]);
+  };
 
   const refreshAll = useCallback(async () => {
-    if (!currentUser) return;
+    const uid = currentUser?.id || null;
+    if (!uid) {
+      refreshGeneration.current += 1;
+      lastLoadedUid.current = null;
+      clearDataSessionCache();
+      clearCommunityState();
+      setIsLoadingFeed(false);
+      return;
+    }
+
+    if (lastLoadedUid.current !== uid) {
+      lastLoadedUid.current = uid;
+      clearDataSessionCache();
+      clearCommunityState();
+    }
+
+    const generation = ++refreshGeneration.current;
     setIsLoadingFeed(true);
     try {
       const [
@@ -132,6 +164,8 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         currentUser.is_moderator || currentUser.is_admin ? DataService.getModerationActions() : Promise.resolve([]),
       ]);
 
+      // A previous account or sort request may finish after this one; never let its result replace the active view.
+      if (generation !== refreshGeneration.current || auth.currentUser?.uid !== uid) return;
       setPosts(loadedPosts);
       setGroups(loadedGroups);
       setFriends(loadedFriends);
@@ -143,17 +177,17 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setReports(loadedReps);
       setModerationActions(loadedActions);
     } catch (err) {
-      console.error('Failed to load community state:', err);
+      if (generation === refreshGeneration.current) {
+        console.error('Failed to load community state from Firestore:', err);
+      }
     } finally {
-      setIsLoadingFeed(false);
+      if (generation === refreshGeneration.current) setIsLoadingFeed(false);
     }
   }, [currentUser, sortFeed]);
 
   useEffect(() => {
-    if (currentUser) {
-      refreshAll();
-    }
-  }, [currentUser, refreshAll]);
+    void refreshAll();
+  }, [refreshAll]);
 
   // Feed Actions
   const createPost = async (
