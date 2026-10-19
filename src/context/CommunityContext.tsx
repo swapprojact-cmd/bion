@@ -125,8 +125,8 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   const refreshAll = useCallback(async () => {
-    const uid = currentUser?.id || null;
-    if (!uid) {
+    const activeUser = currentUser;
+    if (!activeUser) {
       refreshGeneration.current += 1;
       lastLoadedUid.current = null;
       clearDataSessionCache();
@@ -136,6 +136,7 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       return;
     }
 
+    const uid = activeUser.id;
     if (lastLoadedUid.current !== uid) {
       lastLoadedUid.current = uid;
       clearDataSessionCache();
@@ -143,7 +144,6 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setDatabaseError(null);
     }
 
-    const activeUser = currentUser;
     const generation = ++refreshGeneration.current;
     setDatabaseError(null);
     setIsLoadingFeed(true);
@@ -159,18 +159,18 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         loadedReps,
         loadedActions,
       ] = await Promise.all([
-        DataService.getPosts({ currentUserId: activeUser.id, sort: sortFeed }),
-        DataService.getGroups(currentUser.id),
-        DataService.getFriendships(currentUser.id),
-        DataService.getFriendRequests(currentUser.id),
-        DataService.getConversations(currentUser.id),
-        DataService.getNotifications(currentUser.id),
-        DataService.getBlocks(currentUser.id),
-        currentUser.is_moderator || currentUser.is_admin ? DataService.getReports() : Promise.resolve([]),
-        currentUser.is_moderator || currentUser.is_admin ? DataService.getModerationActions() : Promise.resolve([]),
+        DataService.getPosts({ currentUserId: uid, sort: sortFeed }),
+        DataService.getGroups(uid),
+        DataService.getFriendships(uid),
+        DataService.getFriendRequests(uid),
+        DataService.getConversations(uid),
+        DataService.getNotifications(uid),
+        DataService.getBlocks(uid),
+        activeUser.is_moderator || activeUser.is_admin ? DataService.getReports() : Promise.resolve([]),
+        activeUser.is_moderator || activeUser.is_admin ? DataService.getModerationActions() : Promise.resolve([]),
       ]);
 
-      // A previous account or sort request may finish after this one; never let its result replace the active view.
+      // Never let a stale account request replace the current UI.
       if (generation !== refreshGeneration.current || auth.currentUser?.uid !== uid) return;
       setPosts(loadedPosts);
       setGroups(loadedGroups);
@@ -183,7 +183,7 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setReports(loadedReps);
       setModerationActions(loadedActions);
     } catch (err) {
-      if (generation === refreshGeneration.current) {
+      if (generation === refreshGeneration.current && auth.currentUser?.uid === uid) {
         const code = err && typeof err === 'object' && 'code' in err
           ? String((err as { code?: unknown }).code || '')
           : '';
