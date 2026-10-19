@@ -94,12 +94,16 @@ const profileServerCache = new Map<string, Profile>();
 const groupServerCache = new Map<string, Group>();
 
 // Private member and group details must never cross sign-in boundaries in a long-lived tab.
-function profileCacheKey(profileId: string): string {
-  return `${auth.currentUser?.uid || 'anonymous'}:${profileId}`;
+function profileCacheKey(profileId: string, sessionUid: string | null = auth.currentUser?.uid ?? null): string {
+  return `${sessionUid || 'anonymous'}:${profileId}`;
 }
 
-function groupCacheKey(groupId: string): string {
-  return `${auth.currentUser?.uid || 'anonymous'}:${groupId}`;
+function groupCacheKey(groupId: string, sessionUid: string | null = auth.currentUser?.uid ?? null): string {
+  return `${sessionUid || 'anonymous'}:${groupId}`;
+}
+
+function sessionIsCurrent(expectedUid: string | null): boolean {
+  return (auth.currentUser?.uid ?? null) === expectedUid;
 }
 
 function isPermissionDenied(error: unknown): boolean {
@@ -142,38 +146,46 @@ function requireSignedInUser(expectedUserId?: string): string {
 }
 
 async function profileFromCacheOrServer(userId: string): Promise<Profile | undefined> {
-  const cached = profileServerCache.get(profileCacheKey(userId));
+  const sessionUid = auth.currentUser?.uid ?? null;
+  const key = profileCacheKey(userId, sessionUid);
+  const cached = profileServerCache.get(key);
   if (cached) return cached;
   try {
     const snapshot = await getDoc(doc(db, 'profiles', userId));
+    if (!sessionIsCurrent(sessionUid)) return undefined;
     if (!snapshot.exists()) {
-      profileServerCache.delete(profileCacheKey(userId));
+      profileServerCache.delete(key);
       return undefined;
     }
     const profile = documentValue<Profile>(snapshot);
-    profileServerCache.set(profileCacheKey(userId), profile);
+    profileServerCache.set(key, profile);
     store.profiles = cacheById(store.profiles, profile);
     return profile;
   } catch (error) {
+    if (!sessionIsCurrent(sessionUid)) return undefined;
     if (isPermissionDenied(error)) return undefined;
     throw error;
   }
 }
 
 async function groupFromCacheOrServer(groupId: string): Promise<Group | undefined> {
-  const cached = groupServerCache.get(groupCacheKey(groupId));
+  const sessionUid = auth.currentUser?.uid ?? null;
+  const key = groupCacheKey(groupId, sessionUid);
+  const cached = groupServerCache.get(key);
   if (cached) return cached;
   try {
     const snapshot = await getDoc(doc(db, 'groups', groupId));
+    if (!sessionIsCurrent(sessionUid)) return undefined;
     if (!snapshot.exists()) {
-      groupServerCache.delete(groupCacheKey(groupId));
+      groupServerCache.delete(key);
       return undefined;
     }
     const group = documentValue<Group>(snapshot);
-    groupServerCache.set(groupCacheKey(groupId), group);
+    groupServerCache.set(key, group);
     store.groups = cacheById(store.groups, group);
     return group;
   } catch (error) {
+    if (!sessionIsCurrent(sessionUid)) return undefined;
     if (isPermissionDenied(error)) return undefined;
     throw error;
   }
