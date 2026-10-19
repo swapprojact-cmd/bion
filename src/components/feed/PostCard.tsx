@@ -81,7 +81,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   };
 
   return (
-    <article className="bg-[#191321] border border-[#2D233D] rounded-2xl p-5 text-[#F8F5FC] shadow-sm hover:border-[#3D2E55] transition-colors relative">
+    <article className="bc-panel relative overflow-hidden p-4 text-[#F8F5FC] transition-colors hover:border-[#514064] sm:p-5">
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">

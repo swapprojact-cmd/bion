@@ -46,11 +46,11 @@ export const ExploreGroupsPage: React.FC<ExploreGroupsPageProps> = ({
   }
 
   return (
-    <div className="space-y-6 py-4">
+    <div className="bc-page mx-auto max-w-6xl">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold font-display text-white">
+          <h1 className="bc-page-title">
             {onlyJoined ? 'My Community Groups' : 'Explore Community Circles'}
           </h1>
           <p className="text-xs text-[#B9B0C6] mt-1">
@@ -80,7 +80,7 @@ export const ExploreGroupsPage: React.FC<ExploreGroupsPageProps> = ({
             placeholder="Search circles by name, topic, or keywords..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 bg-[#191321] border border-[#2D233D] rounded-xl text-xs text-[#F8F5FC] placeholder-[#B9B0C6]/60 focus:outline-none focus:border-[#9B5CFF]"
+            className="bc-field pl-10 text-sm"
           />
         </div>
 
@@ -106,7 +106,7 @@ export const ExploreGroupsPage: React.FC<ExploreGroupsPageProps> = ({
 
       {/* Groups Grid */}
       {filtered.length === 0 ? (
-        <div className="p-12 rounded-2xl bg-[#191321] border border-[#2D233D] text-center space-y-3">
+        <div className="bc-panel space-y-3 px-5 py-12 text-center">
           <Users className="w-10 h-10 text-[#9B5CFF] mx-auto opacity-70" />
           <h3 className="text-base font-bold text-white">
             {onlyJoined ? 'You haven’t joined any groups yet' : 'No circles found matching your search'}
@@ -134,7 +134,7 @@ export const ExploreGroupsPage: React.FC<ExploreGroupsPageProps> = ({
             return (
               <div
                 key={group.id}
-                className="bg-[#191321] border border-[#2D233D] rounded-2xl p-5 flex flex-col justify-between hover:border-[#3D2E55] transition-all group"
+                className="bc-panel flex flex-col justify-between p-4 transition-all hover:border-[#514064] sm:p-5 group"
               >
                 <div>
                   <div className="flex items-start justify-between gap-2 mb-2">

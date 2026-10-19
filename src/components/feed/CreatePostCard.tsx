@@ -130,7 +130,7 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
   };
 
   return (
-    <div className="bg-[#191321] border border-[#2D233D] rounded-2xl p-4 sm:p-5 shadow-sm text-[#F8F5FC]">
+    <div className="bc-panel p-4 text-[#F8F5FC] sm:p-5">
       <div className="flex items-start gap-3">
         <Avatar src={currentUser.avatar_path} name={currentUser.display_name} size="md" />
         <div className="flex-1">
@@ -145,7 +145,7 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
                 setBody(e.target.value);
                 if (error) setError(null);
               }}
-              className="w-full bg-[#0E0B13] border border-[#2D233D] rounded-xl p-3 text-sm text-[#F8F5FC] placeholder-[#B9B0C6]/60 focus:outline-none focus:border-[#9B5CFF] resize-none transition-colors"
+              className="bc-field min-h-28 resize-y text-sm transition-colors"
             />
 
             {/* Media Upload Area */}

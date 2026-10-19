@@ -10,8 +10,8 @@ type Focus = typeof FOCUS_OPTIONS[number];
 type MatchProfile = { uid: string; display_name: string; username: string; bio?: string; interests?: string[]; orientation?: string; show_orientation?: boolean; focus: Focus[]; opted_in: boolean };
 type MatchRequest = { id: string; sender_id: string; recipient_id: string; status: 'pending' | 'accepted' | 'declined'; sender_name?: string; recipient_name?: string };
 
-const panel = 'rounded-2xl border border-[#2D233D] bg-[#191321] p-5';
-const control = 'w-full rounded-xl border border-[#3A2D4C] bg-[#0E0B13] px-3 py-2.5 text-sm text-white outline-none focus:border-[#9B5CFF]';
+const panel = 'bc-panel p-4 sm:p-5';
+const control = 'bc-field text-sm';
 
 export const SeeYourMatchPage: React.FC = () => {
   const { currentUser, userPrivate } = useAuth();
@@ -127,7 +127,7 @@ export const SeeYourMatchPage: React.FC = () => {
 
   if (!currentUser) return <div className={panel + ' my-8'}><h1 className="text-2xl font-bold">See Your Match</h1><p className="mt-2 text-[#B9B0C6]">Sign in to manage an optional match profile.</p></div>;
 
-  return <div className="mx-auto max-w-5xl space-y-6 py-6">
+  return <div className="bc-page mx-auto max-w-5xl space-y-5">
     <header className="rounded-3xl border border-[#4B2D63] bg-gradient-to-br from-[#241738] to-[#191321] p-6 sm:p-8">
       <div className="flex items-center gap-2 text-sm font-semibold text-pink-300"><Heart className="h-4 w-4" /> OPTIONAL · ADULTS 18+</div>
       <h1 className="mt-3 text-3xl font-extrabold text-white">See Your Match</h1>
@@ -145,7 +145,7 @@ export const SeeYourMatchPage: React.FC = () => {
         <div className="space-y-2 text-sm"><span className="block font-medium">Relationship focus (optional)</span><div className="grid gap-2">{FOCUS_OPTIONS.map(item => <label key={item} className="flex items-center gap-2 text-sm text-[#D2C8DE]"><input type="checkbox" checked={focus.includes(item)} onChange={e => setFocus(prev => e.target.checked ? [...prev, item] : prev.filter(v => v !== item))} className="accent-fuchsia-500" />{item}</label>)}</div></div>
       </div>
       {!isAdultByBirthYear && <label className="flex items-start gap-2 text-xs text-[#D2C8DE]"><input type="checkbox" checked={adultConfirmed} onChange={e => setAdultConfirmed(e.target.checked)} className="mt-0.5 accent-fuchsia-500" /><span>I confirm I am 18 or older. I understand this checkbox is a self-attestation; BiCircle must implement age verification before production launch.</span></label>}
-      <button onClick={savePreferences} disabled={saving} className="rounded-xl bg-gradient-to-r from-[#9B5CFF] to-[#F05AA6] px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving ? 'Saving…' : 'Save preferences'}</button>
+      <button onClick={savePreferences} disabled={saving} className="bc-primary-button disabled:opacity-50">{saving ? 'Saving…' : 'Save preferences'}</button>
     </section>
 
     <section className={panel + ' space-y-4'}>
@@ -154,7 +154,7 @@ export const SeeYourMatchPage: React.FC = () => {
       {enabled && loading && <p className="text-sm text-[#B9B0C6]">Loading profiles…</p>}
       {enabled && !loading && profiles.length === 0 && <p className="text-sm text-[#B9B0C6]">No opted-in profiles are available yet. Check back later.</p>}
       {enabled && profiles.map(person => <article key={person.uid} className="rounded-xl border border-[#3A2D4C] p-4">
-        <div className="flex flex-col justify-between gap-4 sm:flex-row"><div><h3 className="font-bold">{person.display_name}</h3><p className="text-xs text-[#B9B0C6]">@{person.username}</p>{person.bio && <p className="mt-2 text-sm text-[#D2C8DE]">{person.bio}</p>}{person.orientation && person.show_orientation && <p className="mt-2 text-xs text-[#B9B0C6]">Orientation: {person.orientation}</p>}<div className="mt-2 flex flex-wrap gap-1.5">{person.focus.map(f => <span key={f} className="rounded-full bg-[#342345] px-2.5 py-1 text-xs text-purple-200">{f}</span>)}</div></div><div className="flex flex-wrap gap-2 self-start"><button onClick={() => void sendInterest(person)} className="flex items-center gap-1 rounded-lg bg-pink-600 px-3 py-2 text-xs font-semibold"><Heart className="h-3.5 w-3.5" /> Express interest</button><button onClick={() => void block(person)} className="flex items-center gap-1 rounded-lg border border-[#49364E] px-3 py-2 text-xs"><Ban className="h-3.5 w-3.5" /> Block</button><button onClick={() => void report(person)} className="flex items-center gap-1 rounded-lg border border-[#49364E] px-3 py-2 text-xs"><Flag className="h-3.5 w-3.5" /> Report</button></div></div>
+        <div className="flex flex-col justify-between gap-4 sm:flex-row"><div><h3 className="font-bold">{person.display_name}</h3><p className="text-xs text-[#B9B0C6]">@{person.username}</p>{person.bio && <p className="mt-2 text-sm text-[#D2C8DE]">{person.bio}</p>}{person.orientation && person.show_orientation && <p className="mt-2 text-xs text-[#B9B0C6]">Orientation: {person.orientation}</p>}<div className="mt-2 flex flex-wrap gap-1.5">{person.focus.map(f => <span key={f} className="rounded-full bg-[#342345] px-2.5 py-1 text-xs text-purple-200">{f}</span>)}</div></div><div className="flex flex-wrap gap-2 self-start"><button onClick={() => void sendInterest(person)} className="bc-primary-button !min-h-10 !px-3 !py-2 !text-xs"><Heart className="h-3.5 w-3.5" /> Express interest</button><button onClick={() => void block(person)} className="flex items-center gap-1 rounded-lg border border-[#49364E] px-3 py-2 text-xs"><Ban className="h-3.5 w-3.5" /> Block</button><button onClick={() => void report(person)} className="flex items-center gap-1 rounded-lg border border-[#49364E] px-3 py-2 text-xs"><Flag className="h-3.5 w-3.5" /> Report</button></div></div>
       </article>)}
     </section>
 
