@@ -18,48 +18,10 @@ import {
   ModerationActionType,
   Visibility,
 } from '../types';
-import {
-  INITIAL_PROFILES,
-  INITIAL_USER_PRIVATE,
-  INITIAL_GROUPS,
-  INITIAL_GROUP_MEMBERS,
-  INITIAL_POSTS,
-  INITIAL_COMMENTS,
-  INITIAL_FRIENDSHIPS,
-  INITIAL_FRIEND_REQUESTS,
-  INITIAL_CONVERSATIONS,
-  INITIAL_MESSAGES,
-  INITIAL_NOTIFICATIONS,
-  INITIAL_REPORTS,
-  INITIAL_MODERATION_ACTIONS,
-} from './initialData';
 import { auth, db } from './firebase';
 import { doc, setDoc, updateDoc, deleteDoc, getDoc, getDocs, collection, query, where, orderBy, limit, runTransaction, writeBatch, getCountFromServer, type QueryConstraint } from 'firebase/firestore';
 
-// Local storage keys
-const STORAGE_PREFIX = 'bicircle_store_';
-
-function getStored<T>(key: string, defaultVal: T): T {
-  if (typeof window === 'undefined') return defaultVal;
-  try {
-    const raw = localStorage.getItem(STORAGE_PREFIX + key);
-    return raw ? JSON.parse(raw) : defaultVal;
-  } catch (e) {
-    console.error(`Error reading ${key} from storage:`, e);
-    return defaultVal;
-  }
-}
-
-function setStored<T>(key: string, value: T): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value));
-  } catch (e) {
-    console.error(`Error saving ${key} to storage:`, e);
-  }
-}
-
-// In-memory / localStorage data storage layer
+// The store is an in-memory view cache only. Firestore is the data source of truth.
 class CommunityDataStore {
   profiles: Profile[] = [];
   userPrivateMap: Record<string, UserPrivate> = {};
@@ -81,82 +43,28 @@ class CommunityDataStore {
   }
 
   reload() {
-    // Start empty by default. Remove only records shipped as demo fixtures,
-    // while preserving real locally-created records for this browser.
-    const withoutSeedRecords = <T>(items: T[], seeds: T[], getKey: (item: T) => string): T[] => {
-      const seedKeys = new Set(seeds.map(getKey));
-      return items.filter(item => !seedKeys.has(getKey(item)));
-    };
-
-    this.profiles = withoutSeedRecords(
-      getStored<Profile[]>('profiles', []),
-      INITIAL_PROFILES,
-      item => item.id
-    );
-    const privateUsers = getStored<Record<string, UserPrivate>>('userPrivate', {});
-    this.userPrivateMap = { ...privateUsers };
-    delete this.userPrivateMap.usr_maya;
-
-    this.groups = withoutSeedRecords(getStored<Group[]>('groups', []), INITIAL_GROUPS, item => item.id);
-    this.groupMembers = withoutSeedRecords(
-      getStored<GroupMember[]>('groupMembers', []),
-      INITIAL_GROUP_MEMBERS,
-      item => `${item.group_id}:${item.user_id}`
-    );
-    this.posts = withoutSeedRecords(getStored<Post[]>('posts', []), INITIAL_POSTS, item => item.id);
-    this.comments = withoutSeedRecords(getStored<Comment[]>('comments', []), INITIAL_COMMENTS, item => item.id);
-    this.friendships = withoutSeedRecords(getStored<Friendship[]>('friendships', []), INITIAL_FRIENDSHIPS, item => item.id);
-    this.friendRequests = withoutSeedRecords(
-      getStored<FriendRequest[]>('friendRequests', []),
-      INITIAL_FRIEND_REQUESTS,
-      item => item.id
-    );
-    this.conversations = withoutSeedRecords(
-      getStored<Conversation[]>('conversations', []),
-      INITIAL_CONVERSATIONS,
-      item => item.id
-    );
-    this.messages = withoutSeedRecords(getStored<Message[]>('messages', []), INITIAL_MESSAGES, item => item.id);
-    this.notifications = withoutSeedRecords(
-      getStored<Notification[]>('notifications', []),
-      INITIAL_NOTIFICATIONS,
-      item => item.id
-    );
-    this.reports = withoutSeedRecords(getStored<Report[]>('reports', []), INITIAL_REPORTS, item => item.id);
-    this.moderationActions = withoutSeedRecords(
-      getStored<ModerationAction[]>('moderationActions', []),
-      INITIAL_MODERATION_ACTIONS,
-      item => item.id
-    );
-    this.blocks = getStored<Block[]>('blocks', []);
+    this.profiles = [];
+    this.userPrivateMap = {};
+    this.groups = [];
+    this.groupMembers = [];
+    this.posts = [];
+    this.comments = [];
+    this.friendships = [];
+    this.friendRequests = [];
+    this.conversations = [];
+    this.messages = [];
+    this.notifications = [];
+    this.reports = [];
+    this.moderationActions = [];
+    this.blocks = [];
   }
 
+  // Intentionally no localStorage persistence: successful Firestore writes are authoritative.
   save() {
-    setStored('profiles', this.profiles);
-    setStored('userPrivate', this.userPrivateMap);
-    setStored('groups', this.groups);
-    setStored('groupMembers', this.groupMembers);
-    setStored('posts', this.posts);
-    setStored('comments', this.comments);
-    setStored('friendships', this.friendships);
-    setStored('friendRequests', this.friendRequests);
-    setStored('conversations', this.conversations);
-    setStored('messages', this.messages);
-    setStored('notifications', this.notifications);
-    setStored('reports', this.reports);
-    setStored('moderationActions', this.moderationActions);
-    setStored('blocks', this.blocks);
+    // DataService updates this in-memory view only after successful server operations.
   }
 
   resetToDefault() {
-    if (typeof window !== 'undefined') {
-      const keys = [
-        'profiles', 'userPrivate', 'groups', 'groupMembers', 'posts',
-        'comments', 'friendships', 'friendRequests', 'conversations',
-        'messages', 'notifications', 'reports', 'moderationActions', 'blocks'
-      ];
-      keys.forEach(k => localStorage.removeItem(STORAGE_PREFIX + k));
-    }
     this.reload();
   }
 }
@@ -181,6 +89,9 @@ export function calculateDistanceKm(lat1?: number, lon1?: number, lat2?: number,
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return Math.round(R * c * 10) / 10;
 }
+
+const profileServerCache = new Map<string, Profile | null>();
+const groupServerCache = new Map<string, Group | null>();
 
 function cleanForFirestore<T extends Record<string, any>>(value: T): Partial<T> {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as Partial<T>;
@@ -217,21 +128,27 @@ function requireSignedInUser(expectedUserId?: string): string {
 }
 
 async function profileFromCacheOrServer(userId: string): Promise<Profile | undefined> {
-  const cached = store.profiles.find(profile => profile.id === userId);
-  if (cached) return cached;
+  if (profileServerCache.has(userId)) return profileServerCache.get(userId) || undefined;
   const snapshot = await getDoc(doc(db, 'profiles', userId));
-  if (!snapshot.exists()) return undefined;
+  if (!snapshot.exists()) {
+    profileServerCache.set(userId, null);
+    return undefined;
+  }
   const profile = documentValue<Profile>(snapshot);
+  profileServerCache.set(userId, profile);
   store.profiles = cacheById(store.profiles, profile);
   return profile;
 }
 
 async function groupFromCacheOrServer(groupId: string): Promise<Group | undefined> {
-  const cached = store.groups.find(group => group.id === groupId);
-  if (cached) return cached;
+  if (groupServerCache.has(groupId)) return groupServerCache.get(groupId) || undefined;
   const snapshot = await getDoc(doc(db, 'groups', groupId));
-  if (!snapshot.exists()) return undefined;
+  if (!snapshot.exists()) {
+    groupServerCache.set(groupId, null);
+    return undefined;
+  }
   const group = documentValue<Group>(snapshot);
+  groupServerCache.set(groupId, group);
   store.groups = cacheById(store.groups, group);
   return group;
 }
