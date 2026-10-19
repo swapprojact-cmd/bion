@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Home,
   Compass,
@@ -29,6 +29,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentRoute, navigate }) => {
   const { unreadNotifsCount, reports } = useCommunity();
 
   const pendingReportsCount = reports.filter(r => r.status === 'pending').length;
+  const [showMoreCommunityLinks, setShowMoreCommunityLinks] = useState(false);
 
   const navItems = [
     { label: 'Community Feed', path: '/feed', icon: Home },
@@ -82,7 +83,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentRoute, navigate }) => {
         <div className="px-3 pb-2 text-[10px] font-bold uppercase tracking-widest text-[#B9B0C6]/60">
           Community
         </div>
-        {navItems.map((item) => {
+        {((showMoreCommunityLinks || navItems.slice(5).some(item => currentRoute === item.path || currentRoute.startsWith(item.path))) ? navItems : navItems.slice(0, 5)).map((item) => {
           const Icon = item.icon;
           const isActive = currentRoute === item.path || (item.path !== '/feed' && currentRoute.startsWith(item.path));
           return (
@@ -107,6 +108,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentRoute, navigate }) => {
             </button>
           );
         })}
+        <button
+          type="button"
+          onClick={() => setShowMoreCommunityLinks(value => !value)}
+          aria-expanded={showMoreCommunityLinks || navItems.slice(5).some(item => currentRoute === item.path || currentRoute.startsWith(item.path))}
+          className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold text-[#C4A5FF] hover:bg-[#191321] transition-colors"
+        >
+          <span>{showMoreCommunityLinks ? 'Show fewer links' : 'More community links'}</span>
+          <span aria-hidden="true">{showMoreCommunityLinks ? '−' : '+'}</span>
+        </button>
       </div>
 
       {/* Moderation / Admin section */}
