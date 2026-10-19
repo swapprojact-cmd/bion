@@ -50,7 +50,7 @@ export const GroupDetailPage: React.FC<GroupDetailPageProps> = ({
     });
 
     return () => { cancelled = true; };
-  }, [group?.id, canViewMemberList, getGroupMembers]);
+  }, [group?.id, canViewMemberList]);
 
   if (!group) {
     return (
