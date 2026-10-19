@@ -10,8 +10,8 @@ type Focus = typeof FOCUS_OPTIONS[number];
 type MatchProfile = { uid: string; display_name: string; username: string; bio?: string; interests?: string[]; orientation?: string; show_orientation?: boolean; focus: Focus[]; opted_in: boolean };
 type MatchRequest = { id: string; sender_id: string; recipient_id: string; status: 'pending' | 'accepted' | 'declined'; sender_name?: string; recipient_name?: string };
 
-const panel = 'rounded-2xl border border-[#2D233D] bg-[#191321] p-5';
-const control = 'w-full rounded-xl border border-[#3A2D4C] bg-[#0E0B13] px-3 py-2.5 text-sm text-white outline-none focus:border-[#9B5CFF]';
+const panel = 'bc-panel p-4 sm:p-5';
+const control = 'bc-field text-sm';
 
 export const SeeYourMatchPage: React.FC = () => {
   const { currentUser, userPrivate } = useAuth();
