@@ -25,6 +25,13 @@ service cloud.firestore {
       return userA < userB ? userA + '_' + userB : userB + '_' + userA;
     }
 
+    function hasGroupMembership(groupId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/group_members/$(groupId + '_' + request.auth.uid))
+        && get(/databases/$(database)/documents/group_members/$(groupId + '_' + request.auth.uid)).data.user_id == request.auth.uid
+        && get(/databases/$(database)/documents/group_members/$(groupId + '_' + request.auth.uid)).data.membership_status in ['active', 'pending'];
+    }
+
     function canReadPostData(postData) {
       return postData.visibility == 'public'
         || (signedIn() && postData.visibility == 'members_only')
@@ -134,11 +141,16 @@ service cloud.firestore {
         && request.resource.data.body.size() <= 10000
         && request.resource.data.visibility in ['public', 'group_only', 'friends_only', 'private']
         && (
-          request.resource.data.visibility != 'group_only'
+          !('group_id' in request.resource.data)
+          || request.resource.data.group_id == null
           || (
             request.resource.data.group_id is string
             && memberOfGroup(request.resource.data.group_id)
           )
+        )
+        && (
+          request.resource.data.visibility != 'group_only'
+          || request.resource.data.group_id is string
         );
 
       allow update: if (
