@@ -229,6 +229,7 @@ export const DataService = {
     const media = { id: 'photo_' + crypto.randomUUID(), type: 'photo' as const, url: photo.url, caption: photo.caption || '', is_18_plus: !!photo.is_18_plus, created_at: now };
     const updated = { ...profile, photos: [media, ...(profile.photos || [])], updated_at: now };
     await updateDoc(doc(db, 'profiles', userId), cleanForFirestore(updated) as Record<string, unknown>);
+    profileServerCache.set(userId, updated);
     store.profiles = cacheById(store.profiles, updated);
     store.save();
     return updated;
@@ -290,6 +291,7 @@ export const DataService = {
       }
     }
     const profiles = [...results.values()];
+    for (const profile of profiles) profileServerCache.set(profile.id, profile);
     store.profiles = profiles;
     store.save();
     return profiles;
@@ -297,8 +299,12 @@ export const DataService = {
 
   async getProfileById(id: string): Promise<Profile | null> {
     const snapshot = await getDoc(doc(db, 'profiles', id));
-    if (!snapshot.exists()) return null;
+    if (!snapshot.exists()) {
+      profileServerCache.set(id, null);
+      return null;
+    }
     const profile = documentValue<Profile>(snapshot);
+    profileServerCache.set(id, profile);
     store.profiles = cacheById(store.profiles, profile);
     return profile;
   },
@@ -310,6 +316,7 @@ export const DataService = {
     const next = { ...current, ...updates, id, updated_at: new Date().toISOString() };
     delete (next as Partial<Profile>).distance_km;
     await updateDoc(doc(db, 'profiles', id), cleanForFirestore(next) as Record<string, unknown>);
+    profileServerCache.set(id, next);
     store.profiles = cacheById(store.profiles, next);
     store.save();
     return next;
@@ -370,6 +377,7 @@ export const DataService = {
       const membership = membershipByGroup.get(group.id);
       groups.push({ ...group, member_count: memberCount, is_member: membership?.membership_status === 'active', membership_status: membership?.membership_status, user_role: membership?.role });
     }
+    for (const group of groups) groupServerCache.set(group.id, group);
     store.groups = groups;
     store.groupMembers = memberships;
     store.save();
@@ -378,9 +386,18 @@ export const DataService = {
 
   async getGroupById(groupId: string, _currentUserId?: string): Promise<Group | null> {
     const direct = await getDoc(doc(db, 'groups', groupId));
-    if (direct.exists()) return documentValue<Group>(direct);
+    if (direct.exists()) {
+      const group = documentValue<Group>(direct);
+      groupServerCache.set(group.id, group);
+      store.groups = cacheById(store.groups, group);
+      return group;
+    }
     const snapshot = await getDocs(query(collection(db, 'groups'), where('slug', '==', groupId), where('visibility', '==', 'public'), limit(1)));
-    return snapshot.empty ? null : documentValue<Group>(snapshot.docs[0]);
+    if (snapshot.empty) return null;
+    const group = documentValue<Group>(snapshot.docs[0]);
+    groupServerCache.set(group.id, group);
+    store.groups = cacheById(store.groups, group);
+    return group;
   },
 
   async getGroupMembers(groupId: string): Promise<GroupMember[]> {
@@ -408,6 +425,7 @@ export const DataService = {
     });
     const membership: GroupMember = { group_id: group.id, user_id: uid, role: 'owner', membership_status: 'active', created_at: now, updated_at: now };
     await setDoc(doc(db, 'group_members', groupMemberDocumentId(group.id, uid)), membership);
+    groupServerCache.set(group.id, group);
     store.groups = cacheById(store.groups, group);
     store.groupMembers = [...store.groupMembers.filter(item => !(item.group_id === group.id && item.user_id === uid)), membership];
     store.save();
