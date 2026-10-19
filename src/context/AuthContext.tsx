@@ -50,8 +50,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const prof = await DataService.getProfileById(firebaseUser.uid);
         if (!prof) {
-          setCurrentUser(null);
-          setUserPrivate(null);
+          // Signup writes the profile immediately after creating the Auth user.
+          // Do not overwrite a profile already installed by that concurrent signup flow.
+          setCurrentUser(existing => existing?.id === firebaseUser.uid ? existing : null);
+          setUserPrivate(existing => existing?.user_id === firebaseUser.uid ? existing : null);
           console.error('Authenticated Firebase user has no matching Firestore profile.');
           return;
         }
@@ -61,8 +63,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUserPrivate(priv);
       } catch (error) {
         console.error('Unable to load signed-in Firebase account data:', error);
-        setCurrentUser(null);
-        setUserPrivate(null);
+        setCurrentUser(existing => existing?.id === firebaseUser.uid ? existing : null);
+        setUserPrivate(existing => existing?.user_id === firebaseUser.uid ? existing : null);
       } finally {
         setIsLoading(false);
       }
