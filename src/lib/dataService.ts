@@ -555,35 +555,65 @@ export const DataService = {
     const uid = auth.currentUser?.uid;
     const { groupId, sort = 'latest', authorId } = options || {};
     const results = new Map<string, Post>();
-    const fetchWith = async (constraints: QueryConstraint[]) => {
-      const snapshot = await getDocs(query(collection(db, 'posts'), ...constraints));
+
+    // Put every filter before orderBy/limit so all generated Firestore queries are valid.
+    const fetchWith = async (filters: QueryConstraint[]) => {
+      const snapshot = await getDocs(query(
+        collection(db, 'posts'),
+        ...filters,
+        where('status', '==', 'published'),
+        orderBy('created_at', 'desc'),
+        limit(60)
+      ));
       snapshot.docs.forEach(item => {
         const post = documentValue<Post>(item);
         if (post.status === 'published') results.set(post.id, post);
       });
     };
-    const base: QueryConstraint[] = [where('status', '==', 'published'), orderBy('created_at', 'desc'), limit(60)];
+
     if (authorId && uid === authorId) {
-      await fetchWith([where('author_id', '==', authorId), ...base]);
+      await fetchWith([where('author_id', '==', authorId)]);
     } else {
-      const publicConstraints: QueryConstraint[] = [...base, where('visibility', '==', 'public')];
-      if (groupId) publicConstraints.push(where('group_id', '==', groupId));
-      if (authorId) publicConstraints.push(where('author_id', '==', authorId));
-      await fetchWith(publicConstraints);
+      const publicFilters: QueryConstraint[] = [where('visibility', '==', 'public')];
+      if (groupId) publicFilters.push(where('group_id', '==', groupId));
+      if (authorId) publicFilters.push(where('author_id', '==', authorId));
+      await fetchWith(publicFilters);
+
       if (uid && groupId && await isActiveGroupMember(groupId, uid)) {
-        await fetchWith([...base, where('visibility', '==', 'group_only'), where('group_id', '==', groupId)]);
+        const groupFilters: QueryConstraint[] = [
+          where('visibility', '==', 'group_only'),
+          where('group_id', '==', groupId),
+        ];
+        if (authorId) groupFilters.push(where('author_id', '==', authorId));
+        await fetchWith(groupFilters);
       }
+
       if (uid && authorId && !groupId) {
         const [friendshipA, friendshipB] = await Promise.all([
           getDocs(query(collection(db, 'friendships'), where('user_a', '==', uid), where('user_b', '==', authorId))),
           getDocs(query(collection(db, 'friendships'), where('user_a', '==', authorId), where('user_b', '==', uid))),
         ]);
         if (friendshipA.size || friendshipB.size) {
-          await fetchWith([...base, where('visibility', '==', 'friends_only'), where('author_id', '==', authorId)]);
+          await fetchWith([where('visibility', '==', 'friends_only'), where('author_id', '==', authorId)]);
         }
       } else if (uid && !groupId && !authorId) {
-        const friends = await this.getFriendships(uid);
-        for (const friend of friends) await fetchWith([...base, where('visibility', '==', 'friends_only'), where('author_id', '==', friend.id)]);
+        const [memberships, friends] = await Promise.all([
+          getDocs(query(collection(db, 'group_members'), where('user_id', '==', uid), where('membership_status', '==', 'active'))),
+          this.getFriendships(uid),
+        ]);
+
+        for (const membership of memberships.docs) {
+          await fetchWith([
+            where('visibility', '==', 'group_only'),
+            where('group_id', '==', String(membership.data().group_id)),
+          ]);
+        }
+        for (const friend of friends) {
+          await fetchWith([
+            where('visibility', '==', 'friends_only'),
+            where('author_id', '==', friend.id),
+          ]);
+        }
       }
     }
 
@@ -595,22 +625,37 @@ export const DataService = {
       let likesCount = Number(post.likes_count || 0);
       let commentsCount = Number(post.comments_count || 0);
       let hasLiked = false;
+
       try {
         likesCount = (await getCountFromServer(collection(db, 'posts', post.id, 'likes'))).data().count;
-      } catch { /* Use the stored count if aggregates are unavailable. */ }
+      } catch {
+        // Saved counters remain a display fallback if aggregation reads are not available.
+      }
       try {
-        commentsCount = (await getCountFromServer(query(collection(db, 'comments'), where('post_id', '==', post.id), where('status', '==', 'published')))).data().count;
-      } catch { /* Older deployed rules may block count-only reads. */ }
+        commentsCount = (await getCountFromServer(query(
+          collection(db, 'comments'),
+          where('post_id', '==', post.id),
+          where('status', '==', 'published')
+        ))).data().count;
+      } catch {
+        // Saved counters remain a display fallback if aggregation reads are not available.
+      }
       if (uid) {
-        try { hasLiked = (await getDoc(doc(db, 'posts', post.id, 'likes', uid))).exists(); } catch { hasLiked = false; }
+        try {
+          hasLiked = (await getDoc(doc(db, 'posts', post.id, 'likes', uid))).exists();
+        } catch {
+          hasLiked = false;
+        }
       }
       return { ...post, author, group, likes_count: likesCount, comments_count: commentsCount, has_liked: hasLiked };
     }));
+
     const blockedIds = uid ? await blockedIdsForVisibility(uid) : new Set<string>();
     const visible = hydrated.filter(post => !blockedIds.has(post.author_id));
     const sorted = sort === 'popular'
       ? visible.sort((a, b) => b.likes_count - a.likes_count)
       : visible.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
     store.posts = sorted;
     store.save();
     return sorted;
