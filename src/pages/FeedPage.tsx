@@ -148,27 +148,34 @@ export const FeedPage: React.FC<FeedPageProps> = ({ navigate }) => {
 
           {/* Composer */}
           {currentUser ? (
-            <section className="bc-panel overflow-hidden p-3 sm:p-4">
-              <button
-                type="button"
-                onClick={() => setShowComposer((value) => !value)}
-                aria-expanded={showComposer}
-                className="flex w-full min-h-12 items-center gap-3 rounded-xl p-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C4A5FF]"
-              >
-                <Avatar src={currentUser.avatar_path} name={currentUser.display_name} size="md" />
-                <span className="min-w-0 flex-1 truncate rounded-full border border-[#3A2D4C] bg-[#100C16] px-4 py-3 text-sm text-[#9F94AE]">
-                  What would you like to share?
-                </span>
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#9B5CFF]/15 text-[#C4A5FF]">
-                  <Plus className="h-5 w-5" />
-                </span>
-              </button>
-              {showComposer && (
-                <div className="mt-3 border-t border-[#2D233D] pt-3">
+            <>
+              {!showComposer ? (
+                <section className="bc-panel p-3 sm:p-4">
+                  <button
+                    type="button"
+                    onClick={() => setShowComposer(true)}
+                    aria-expanded={false}
+                    className="flex w-full min-h-12 items-center gap-3 rounded-xl p-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C4A5FF]"
+                  >
+                    <Avatar src={currentUser.avatar_path} name={currentUser.display_name} size="md" />
+                    <span className="min-w-0 flex-1 truncate rounded-full border border-[#3A2D4C] bg-[#100C16] px-4 py-3 text-sm text-[#9F94AE]">
+                      What would you like to share?
+                    </span>
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#9B5CFF]/15 text-[#C4A5FF]">
+                      <Plus className="h-5 w-5" />
+                    </span>
+                  </button>
+                </section>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between px-1">
+                    <h2 className="text-sm font-bold text-white">Create a post</h2>
+                    <button type="button" onClick={() => setShowComposer(false)} className="bc-secondary-button !min-h-9 !px-3 !py-1 text-xs">Cancel</button>
+                  </div>
                   <CreatePostCard onPostCreated={() => setShowComposer(false)} />
                 </div>
               )}
-            </section>
+            </>
           ) : (
             <section className="bc-panel flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
