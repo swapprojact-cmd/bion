@@ -1,0 +1,180 @@
+/* BiCircle shared UI system — Instagram-inspired social patterns, original BiCircle branding. */
+@layer components {
+  .bc-page {
+    width: 100%;
+    min-width: 0;
+    margin-inline: auto;
+    padding-block: 1.25rem 2rem;
+  }
+
+  .bc-page-shell {
+    width: 100%;
+    min-width: 0;
+    max-width: 72rem;
+    margin-inline: auto;
+  }
+
+  .bc-panel {
+    min-width: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 1.125rem;
+    background: var(--card-surface);
+    box-shadow: 0 8px 28px rgb(0 0 0 / 12%);
+  }
+
+  .bc-panel-soft {
+    min-width: 0;
+    border: 1px solid rgb(61 46 85 / 68%);
+    border-radius: 1rem;
+    background: linear-gradient(145deg, rgb(25 19 33 / 96%), rgb(19 15 27 / 98%));
+  }
+
+  .bc-page-title {
+    color: var(--text-primary);
+    font-family: 'Space Grotesk', 'Plus Jakarta Sans', system-ui, sans-serif;
+    font-size: clamp(1.35rem, 2.4vw, 1.8rem);
+    font-weight: 750;
+    line-height: 1.18;
+    letter-spacing: -0.035em;
+  }
+
+  .bc-muted {
+    color: var(--text-secondary);
+  }
+
+  .bc-primary-button {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid transparent;
+    border-radius: 0.8rem;
+    background: linear-gradient(105deg, var(--primary-purple), var(--accent-pink));
+    padding: 0.65rem 1rem;
+    color: white;
+    font-size: 0.875rem;
+    font-weight: 700;
+    text-align: center;
+    transition: filter 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+  }
+
+  .bc-primary-button:hover {
+    filter: brightness(1.08);
+    box-shadow: 0 8px 24px rgb(155 92 255 / 18%);
+  }
+
+  .bc-primary-button:active {
+    transform: translateY(1px);
+  }
+
+  .bc-primary-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+    box-shadow: none;
+  }
+
+  .bc-secondary-button {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border: 1px solid #423354;
+    border-radius: 0.8rem;
+    background: #21192d;
+    padding: 0.65rem 1rem;
+    color: var(--text-primary);
+    font-size: 0.875rem;
+    font-weight: 650;
+    transition: background 160ms ease, border-color 160ms ease;
+  }
+
+  .bc-secondary-button:hover {
+    border-color: #70539b;
+    background: #2a2038;
+  }
+
+  .bc-field {
+    width: 100%;
+    min-width: 0;
+    min-height: 2.75rem;
+    border: 1px solid #3a2d4c;
+    border-radius: 0.8rem;
+    background: #100c16;
+    padding: 0.7rem 0.85rem;
+    color: var(--text-primary);
+    font: inherit;
+  }
+
+  .bc-field::placeholder {
+    color: #8f849c;
+  }
+
+  .bc-field:focus-visible,
+  .bc-primary-button:focus-visible,
+  .bc-secondary-button:focus-visible {
+    outline: 2px solid #c4a5ff;
+    outline-offset: 2px;
+  }
+
+  .bc-story-ring {
+    display: grid;
+    width: 3.65rem;
+    height: 3.65rem;
+    flex: 0 0 auto;
+    place-items: center;
+    border-radius: 9999px;
+    background: linear-gradient(135deg, var(--primary-purple), var(--accent-pink));
+    padding: 2px;
+  }
+
+  .bc-story-ring-inner {
+    display: grid;
+    width: 100%;
+    height: 100%;
+    place-items: center;
+    overflow: hidden;
+    border: 2px solid var(--bg-main);
+    border-radius: 9999px;
+    background: var(--card-surface);
+  }
+
+  .bc-pill {
+    display: inline-flex;
+    min-height: 2rem;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #3a2d4c;
+    border-radius: 9999px;
+    background: #1c1526;
+    padding: 0.35rem 0.8rem;
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+
+  .bc-pill[aria-pressed='true'],
+  .bc-pill[data-active='true'] {
+    border-color: rgb(155 92 255 / 65%);
+    background: rgb(155 92 255 / 17%);
+    color: #e5d7ff;
+  }
+
+  .bc-divider {
+    border-color: rgb(61 46 85 / 72%);
+  }
+
+  .bc-focus-ring:focus-visible {
+    outline: 2px solid #c4a5ff;
+    outline-offset: 3px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bc-primary-button,
+    .bc-secondary-button {
+      transition: none;
+    }
+  }
+}
