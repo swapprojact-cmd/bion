@@ -24,7 +24,7 @@ export const GroupDetailPage: React.FC<GroupDetailPageProps> = ({
   const [loadingMembers, setLoadingMembers] = useState(false);
 
   const group = groups.find(g => g.id === groupId || g.slug === groupId);
-  const canViewMemberList = !!group && (
+  const canViewMemberList = !!currentUser && !!group && (
     group.visibility === 'public'
     || group.is_member === true
     || group.owner_id === currentUser?.id
