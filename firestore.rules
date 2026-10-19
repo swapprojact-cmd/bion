@@ -384,8 +384,45 @@ service cloud.firestore {
     // Interest is a request, not a connection. Only the recipient can accept/decline.
     match /match_requests/{requestId} {
       function participants() {
-        return signedIn() && (resource.data.sender_id == request.auth.uid
-          || resource.data.recipient_id == request.auth.uid);
+        return signedIn() && (
+          // The sender uses a deterministic document ID to check for an existing
+          // outgoing request before create; allow only their own ID prefix.
+          requestId.matches('^' + request.auth.uid + '_.*
+      allow create: if signedIn()
+        && request.resource.data.sender_id == request.auth.uid
+        && request.resource.data.recipient_id is string
+        && request.resource.data.recipient_id != request.auth.uid
+        && requestId == request.auth.uid + '_' + request.resource.data.recipient_id
+        && request.resource.data.status == 'pending'
+        && exists(/databases/$(database)/documents/relationship_profiles/$(request.auth.uid))
+        && get(/databases/$(database)/documents/relationship_profiles/$(request.auth.uid)).data.opted_in == true
+        && exists(/databases/$(database)/documents/relationship_profiles/$(request.resource.data.recipient_id))
+        && get(/databases/$(database)/documents/relationship_profiles/$(request.resource.data.recipient_id)).data.opted_in == true
+        && !exists(/databases/$(database)/documents/blocks/$(request.auth.uid + '_' + request.resource.data.recipient_id))
+        && !exists(/databases/$(database)/documents/blocks/$(request.resource.data.recipient_id + '_' + request.auth.uid));
+      allow update: if signedIn()
+        && resource.data.recipient_id == request.auth.uid
+        && resource.data.status == 'pending'
+        && request.resource.data.sender_id == resource.data.sender_id
+        && request.resource.data.recipient_id == resource.data.recipient_id
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updated_at'])
+        && request.resource.data.status in ['accepted', 'declined']
+        && exists(/databases/$(database)/documents/relationship_profiles/$(resource.data.sender_id))
+        && get(/databases/$(database)/documents/relationship_profiles/$(resource.data.sender_id)).data.opted_in == true
+        && !exists(/databases/$(database)/documents/blocks/$(resource.data.sender_id + '_' + request.auth.uid))
+        && !exists(/databases/$(database)/documents/blocks/$(request.auth.uid + '_' + resource.data.sender_id));
+      allow delete: if participants();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+)
+          || resource.data.sender_id == request.auth.uid
+          || resource.data.recipient_id == request.auth.uid
+        );
       }
       allow read: if participants();
       allow create: if signedIn()
