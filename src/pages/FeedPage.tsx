@@ -1,14 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import {
   ArrowRight,
-  Bookmark,
   Compass,
   Heart,
   HeartHandshake,
-  MessageCircle,
   Plus,
   Search,
-  Send,
   Sparkles,
   Users,
   Clock,
