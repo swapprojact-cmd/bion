@@ -148,17 +148,7 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setDatabaseError(null);
     setIsLoadingFeed(true);
     try {
-      const [
-        loadedPosts,
-        loadedGroups,
-        loadedFriends,
-        loadedReqs,
-        loadedConvs,
-        loadedNotifs,
-        loadedBlocks,
-        loadedReps,
-        loadedActions,
-      ] = await Promise.all([
+      const results = await Promise.allSettled([
         DataService.getPosts({ currentUserId: uid, sort: sortFeed }),
         DataService.getGroups(uid),
         DataService.getFriendships(uid),
@@ -166,35 +156,41 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         DataService.getConversations(uid),
         DataService.getNotifications(uid),
         DataService.getBlocks(uid),
-        activeUser.is_moderator || activeUser.is_admin ? DataService.getReports() : Promise.resolve([]),
-        activeUser.is_moderator || activeUser.is_admin ? DataService.getModerationActions() : Promise.resolve([]),
+        activeUser.is_moderator || activeUser.is_admin ? DataService.getReports() : Promise.resolve([] as Report[]),
+        activeUser.is_moderator || activeUser.is_admin ? DataService.getModerationActions() : Promise.resolve([] as ModerationAction[]),
       ]);
 
       // Never let a stale account request replace the current UI.
       if (generation !== refreshGeneration.current || auth.currentUser?.uid !== uid) return;
-      setPosts(loadedPosts);
-      setGroups(loadedGroups);
-      setFriends(loadedFriends);
-      setIncomingRequests(loadedReqs.incoming);
-      setOutgoingRequests(loadedReqs.outgoing);
-      setConversations(loadedConvs);
-      setNotifications(loadedNotifs);
-      setBlockedUsers(loadedBlocks);
-      setReports(loadedReps);
-      setModerationActions(loadedActions);
-    } catch (err) {
-      if (generation === refreshGeneration.current && auth.currentUser?.uid === uid) {
-        const code = err && typeof err === 'object' && 'code' in err
-          ? String((err as { code?: unknown }).code || '')
+
+      // Let healthy collections render even if one unrelated collection is denied or lacks an index.
+      setPosts(results[0].status === 'fulfilled' ? results[0].value : []);
+      setGroups(results[1].status === 'fulfilled' ? results[1].value : []);
+      setFriends(results[2].status === 'fulfilled' ? results[2].value : []);
+      setIncomingRequests(results[3].status === 'fulfilled' ? results[3].value.incoming : []);
+      setOutgoingRequests(results[3].status === 'fulfilled' ? results[3].value.outgoing : []);
+      setConversations(results[4].status === 'fulfilled' ? results[4].value : []);
+      setNotifications(results[5].status === 'fulfilled' ? results[5].value : []);
+      setBlockedUsers(results[6].status === 'fulfilled' ? results[6].value : []);
+      setReports(results[7].status === 'fulfilled' ? results[7].value : []);
+      setModerationActions(results[8].status === 'fulfilled' ? results[8].value : []);
+
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failures.length > 0) {
+        const firstError = failures[0].reason;
+        const code = firstError && typeof firstError === 'object' && 'code' in firstError
+          ? String((firstError as { code?: unknown }).code || '')
           : '';
-        console.error('Failed to load community state from Firestore:', code || err);
+        console.error('Some Firestore collections failed to load:', failures.map(item => item.reason));
         if (code === 'permission-denied') {
-          setDatabaseError('The database rejected a request. Check the Firestore rules and signed-in account permissions.');
+          setDatabaseError('Some cloud data was blocked by Firestore rules for this account. Other sections have loaded; review the rule permissions.');
         } else if (code === 'failed-precondition') {
-          setDatabaseError('The database needs an index or configuration update before this data can load.');
+          setDatabaseError('Some cloud data needs a Firestore index or configuration update. Other sections have loaded.');
         } else {
-          setDatabaseError('BiCircle could not load some cloud data. Check your connection, then refresh the page.');
+          setDatabaseError('Some cloud data could not be loaded. Other sections have loaded; check your connection and refresh.');
         }
+      } else {
+        setDatabaseError(null);
       }
     } finally {
       if (generation === refreshGeneration.current) setIsLoadingFeed(false);
