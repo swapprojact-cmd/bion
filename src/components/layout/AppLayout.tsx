@@ -4,7 +4,7 @@ import { Sidebar } from './Sidebar';
 import { MobileNav } from './MobileNav';
 import { VisitorTermsIntroModal } from '../modals/VisitorTermsIntroModal';
 import { useAuth } from '../../context/AuthContext';
-import { AlertTriangle, WifiOff } from 'lucide-react';
+import { WifiOff } from 'lucide-react';
 
 interface AppLayoutProps {
   currentRoute: string;
