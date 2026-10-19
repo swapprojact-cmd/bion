@@ -93,6 +93,15 @@ export function calculateDistanceKm(lat1?: number, lon1?: number, lat2?: number,
 const profileServerCache = new Map<string, Profile>();
 const groupServerCache = new Map<string, Group>();
 
+// Private member and group details must never cross sign-in boundaries in a long-lived tab.
+function profileCacheKey(profileId: string): string {
+  return `${auth.currentUser?.uid || 'anonymous'}:${profileId}`;
+}
+
+function groupCacheKey(groupId: string): string {
+  return `${auth.currentUser?.uid || 'anonymous'}:${groupId}`;
+}
+
 function isPermissionDenied(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error
     && (error as { code?: unknown }).code === 'permission-denied';
@@ -133,16 +142,16 @@ function requireSignedInUser(expectedUserId?: string): string {
 }
 
 async function profileFromCacheOrServer(userId: string): Promise<Profile | undefined> {
-  const cached = profileServerCache.get(userId);
+  const cached = profileServerCache.get(profileCacheKey(userId));
   if (cached) return cached;
   try {
     const snapshot = await getDoc(doc(db, 'profiles', userId));
     if (!snapshot.exists()) {
-      profileServerCache.delete(userId);
+      profileServerCache.delete(profileCacheKey(userId));
       return undefined;
     }
     const profile = documentValue<Profile>(snapshot);
-    profileServerCache.set(userId, profile);
+    profileServerCache.set(profileCacheKey(userId), profile);
     store.profiles = cacheById(store.profiles, profile);
     return profile;
   } catch (error) {
@@ -152,16 +161,16 @@ async function profileFromCacheOrServer(userId: string): Promise<Profile | undef
 }
 
 async function groupFromCacheOrServer(groupId: string): Promise<Group | undefined> {
-  const cached = groupServerCache.get(groupId);
+  const cached = groupServerCache.get(groupCacheKey(groupId));
   if (cached) return cached;
   try {
     const snapshot = await getDoc(doc(db, 'groups', groupId));
     if (!snapshot.exists()) {
-      groupServerCache.delete(groupId);
+      groupServerCache.delete(groupCacheKey(groupId));
       return undefined;
     }
     const group = documentValue<Group>(snapshot);
-    groupServerCache.set(groupId, group);
+    groupServerCache.set(groupCacheKey(groupId), group);
     store.groups = cacheById(store.groups, group);
     return group;
   } catch (error) {
@@ -246,7 +255,7 @@ export const DataService = {
     const media = { id: 'photo_' + crypto.randomUUID(), type: 'photo' as const, url: photo.url, caption: photo.caption || '', is_18_plus: !!photo.is_18_plus, created_at: now };
     const updated = { ...profile, photos: [media, ...(profile.photos || [])], updated_at: now };
     await updateDoc(doc(db, 'profiles', userId), cleanForFirestore(updated) as Record<string, unknown>);
-    profileServerCache.set(userId, updated);
+    profileServerCache.set(profileCacheKey(userId), updated);
     store.profiles = cacheById(store.profiles, updated);
     store.save();
     return updated;
@@ -308,7 +317,7 @@ export const DataService = {
       }
     }
     const profiles = [...results.values()];
-    for (const profile of profiles) profileServerCache.set(profile.id, profile);
+    for (const profile of profiles) profileServerCache.set(profileCacheKey(profile.id), profile);
     store.profiles = profiles;
     store.save();
     return profiles;
@@ -317,11 +326,11 @@ export const DataService = {
   async getProfileById(id: string): Promise<Profile | null> {
     const snapshot = await getDoc(doc(db, 'profiles', id));
     if (!snapshot.exists()) {
-      profileServerCache.delete(id);
+      profileServerCache.delete(profileCacheKey(id));
       return null;
     }
     const profile = documentValue<Profile>(snapshot);
-    profileServerCache.set(id, profile);
+    profileServerCache.set(profileCacheKey(id), profile);
     store.profiles = cacheById(store.profiles, profile);
     return profile;
   },
@@ -333,7 +342,7 @@ export const DataService = {
     const next = { ...current, ...updates, id, updated_at: new Date().toISOString() };
     delete (next as Partial<Profile>).distance_km;
     await updateDoc(doc(db, 'profiles', id), cleanForFirestore(next) as Record<string, unknown>);
-    profileServerCache.set(id, next);
+    profileServerCache.set(profileCacheKey(id), next);
     store.profiles = cacheById(store.profiles, next);
     store.save();
     return next;
@@ -398,7 +407,7 @@ export const DataService = {
       const membership = membershipByGroup.get(group.id);
       groups.push({ ...group, member_count: memberCount, is_member: membership?.membership_status === 'active', membership_status: membership?.membership_status, user_role: membership?.role });
     }
-    for (const group of groups) groupServerCache.set(group.id, group);
+    for (const group of groups) groupServerCache.set(groupCacheKey(group.id), group);
     store.groups = groups;
     store.groupMembers = memberships;
     store.save();
