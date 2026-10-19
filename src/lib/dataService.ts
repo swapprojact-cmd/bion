@@ -90,8 +90,13 @@ export function calculateDistanceKm(lat1?: number, lon1?: number, lat2?: number,
   return Math.round(R * c * 10) / 10;
 }
 
-const profileServerCache = new Map<string, Profile | null>();
-const groupServerCache = new Map<string, Group | null>();
+const profileServerCache = new Map<string, Profile>();
+const groupServerCache = new Map<string, Group>();
+
+function isPermissionDenied(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error
+    && (error as { code?: unknown }).code === 'permission-denied';
+}
 
 function cleanForFirestore<T extends Record<string, any>>(value: T): Partial<T> {
   return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as Partial<T>;
@@ -128,29 +133,41 @@ function requireSignedInUser(expectedUserId?: string): string {
 }
 
 async function profileFromCacheOrServer(userId: string): Promise<Profile | undefined> {
-  if (profileServerCache.has(userId)) return profileServerCache.get(userId) || undefined;
-  const snapshot = await getDoc(doc(db, 'profiles', userId));
-  if (!snapshot.exists()) {
-    profileServerCache.set(userId, null);
-    return undefined;
+  const cached = profileServerCache.get(userId);
+  if (cached) return cached;
+  try {
+    const snapshot = await getDoc(doc(db, 'profiles', userId));
+    if (!snapshot.exists()) {
+      profileServerCache.delete(userId);
+      return undefined;
+    }
+    const profile = documentValue<Profile>(snapshot);
+    profileServerCache.set(userId, profile);
+    store.profiles = cacheById(store.profiles, profile);
+    return profile;
+  } catch (error) {
+    if (isPermissionDenied(error)) return undefined;
+    throw error;
   }
-  const profile = documentValue<Profile>(snapshot);
-  profileServerCache.set(userId, profile);
-  store.profiles = cacheById(store.profiles, profile);
-  return profile;
 }
 
 async function groupFromCacheOrServer(groupId: string): Promise<Group | undefined> {
-  if (groupServerCache.has(groupId)) return groupServerCache.get(groupId) || undefined;
-  const snapshot = await getDoc(doc(db, 'groups', groupId));
-  if (!snapshot.exists()) {
-    groupServerCache.set(groupId, null);
-    return undefined;
+  const cached = groupServerCache.get(groupId);
+  if (cached) return cached;
+  try {
+    const snapshot = await getDoc(doc(db, 'groups', groupId));
+    if (!snapshot.exists()) {
+      groupServerCache.delete(groupId);
+      return undefined;
+    }
+    const group = documentValue<Group>(snapshot);
+    groupServerCache.set(groupId, group);
+    store.groups = cacheById(store.groups, group);
+    return group;
+  } catch (error) {
+    if (isPermissionDenied(error)) return undefined;
+    throw error;
   }
-  const group = documentValue<Group>(snapshot);
-  groupServerCache.set(groupId, group);
-  store.groups = cacheById(store.groups, group);
-  return group;
 }
 
 async function isActiveGroupMember(groupId: string, userId: string): Promise<boolean> {
@@ -300,7 +317,7 @@ export const DataService = {
   async getProfileById(id: string): Promise<Profile | null> {
     const snapshot = await getDoc(doc(db, 'profiles', id));
     if (!snapshot.exists()) {
-      profileServerCache.set(id, null);
+      profileServerCache.delete(id);
       return null;
     }
     const profile = documentValue<Profile>(snapshot);
