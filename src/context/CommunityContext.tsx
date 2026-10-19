@@ -36,6 +36,7 @@ interface CommunityContextType {
   sortFeed: 'latest' | 'popular';
   setSortFeed: (sort: 'latest' | 'popular') => void;
   isLoadingFeed: boolean;
+  databaseError: string | null;
 
   // Actions
   refreshAll: () => Promise<void>;
@@ -106,6 +107,7 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [moderationActions, setModerationActions] = useState<ModerationAction[]>([]);
   const [sortFeed, setSortFeed] = useState<'latest' | 'popular'>('latest');
   const [isLoadingFeed, setIsLoadingFeed] = useState<boolean>(false);
+  const [databaseError, setDatabaseError] = useState<string | null>(null);
   const lastLoadedUid = useRef<string | null>(null);
   const refreshGeneration = useRef(0);
 
@@ -129,6 +131,7 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       lastLoadedUid.current = null;
       clearDataSessionCache();
       clearCommunityState();
+      setDatabaseError(null);
       setIsLoadingFeed(false);
       return;
     }
@@ -137,9 +140,11 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       lastLoadedUid.current = uid;
       clearDataSessionCache();
       clearCommunityState();
+      setDatabaseError(null);
     }
 
     const generation = ++refreshGeneration.current;
+    setDatabaseError(null);
     setIsLoadingFeed(true);
     try {
       const [
@@ -178,7 +183,17 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setModerationActions(loadedActions);
     } catch (err) {
       if (generation === refreshGeneration.current) {
-        console.error('Failed to load community state from Firestore:', err);
+        const code = err && typeof err === 'object' && 'code' in err
+          ? String((err as { code?: unknown }).code || '')
+          : '';
+        console.error('Failed to load community state from Firestore:', code || err);
+        if (code === 'permission-denied') {
+          setDatabaseError('The database rejected a request. Check the Firestore rules and signed-in account permissions.');
+        } else if (code === 'failed-precondition') {
+          setDatabaseError('The database needs an index or configuration update before this data can load.');
+        } else {
+          setDatabaseError('BiCircle could not load some cloud data. Check your connection, then refresh the page.');
+        }
       }
     } finally {
       if (generation === refreshGeneration.current) setIsLoadingFeed(false);
@@ -438,6 +453,7 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         sortFeed,
         setSortFeed,
         isLoadingFeed,
+        databaseError,
         refreshAll,
         createPost,
         deletePost,
