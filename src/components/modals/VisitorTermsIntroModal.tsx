@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, HeartHandshake, Lock, Sparkles, Check, ArrowRight, BookOpen, Users, Heart, X } from 'lucide-react';
+import { ShieldCheck, Sparkles, ArrowRight, BookOpen, Users, Heart } from 'lucide-react';
 
 interface VisitorTermsIntroModalProps {
   navigate: (route: string) => void;
