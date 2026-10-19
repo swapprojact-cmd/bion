@@ -418,14 +418,14 @@ export const DataService = {
     const direct = await getDoc(doc(db, 'groups', groupId));
     if (direct.exists()) {
       const group = documentValue<Group>(direct);
-      groupServerCache.set(group.id, group);
+      groupServerCache.set(groupCacheKey(group.id), group);
       store.groups = cacheById(store.groups, group);
       return group;
     }
     const snapshot = await getDocs(query(collection(db, 'groups'), where('slug', '==', groupId), where('visibility', '==', 'public'), limit(1)));
     if (snapshot.empty) return null;
     const group = documentValue<Group>(snapshot.docs[0]);
-    groupServerCache.set(group.id, group);
+    groupServerCache.set(groupCacheKey(group.id), group);
     store.groups = cacheById(store.groups, group);
     return group;
   },
@@ -455,7 +455,7 @@ export const DataService = {
     });
     const membership: GroupMember = { group_id: group.id, user_id: uid, role: 'owner', membership_status: 'active', created_at: now, updated_at: now };
     await setDoc(doc(db, 'group_members', groupMemberDocumentId(group.id, uid)), membership);
-    groupServerCache.set(group.id, group);
+    groupServerCache.set(groupCacheKey(group.id), group);
     store.groups = cacheById(store.groups, group);
     store.groupMembers = [...store.groupMembers.filter(item => !(item.group_id === group.id && item.user_id === uid)), membership];
     store.save();
