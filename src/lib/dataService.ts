@@ -196,6 +196,13 @@ async function blockedIdsForVisibility(userId: string): Promise<Set<string>> {
   return blockedIds;
 }
 
+// Clear all in-memory records when the Firebase account changes or signs out.
+export function clearDataSessionCache(): void {
+  profileServerCache.clear();
+  groupServerCache.clear();
+  store.reload();
+}
+
 export const DataService = {
   async getNearbyProfiles(currentUserId?: string, options?: {
     maxDistanceKm?: number;
