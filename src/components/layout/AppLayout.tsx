@@ -4,6 +4,7 @@ import { Sidebar } from './Sidebar';
 import { MobileNav } from './MobileNav';
 import { VisitorTermsIntroModal } from '../modals/VisitorTermsIntroModal';
 import { useAuth } from '../../context/AuthContext';
+import { useCommunity } from '../../context/CommunityContext';
 import { WifiOff } from 'lucide-react';
 
 interface AppLayoutProps {
@@ -18,6 +19,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   children,
 }) => {
   const { currentUser, firebaseConnected } = useAuth();
+  const { databaseError } = useCommunity();
 
   // Keep public and authentication pages focused; authenticated pages get the desktop sidebar.
   const isAuthOrLanding = currentRoute === '/' || currentRoute === '/login' || currentRoute === '/signup' || currentRoute === '/forgot-password' || currentRoute === '/reset-password';
@@ -32,12 +34,21 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           <Sidebar currentRoute={currentRoute} navigate={navigate} />
         )}
         <main className={'flex-1 min-w-0 pb-24 lg:pb-8 ' + (showSidebar ? 'lg:pl-6' : '')}>
-          {firebaseConnected === false && (
+          {firebaseConnected === false && !databaseError && (
             <div role="alert" className="mb-4 flex items-start gap-3 rounded-xl border border-amber-400/30 bg-amber-400/10 p-3.5 text-sm text-amber-100">
               <WifiOff className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" aria-hidden="true" />
               <div className="min-w-0">
                 <p className="font-semibold">BiCircle cannot reach its database right now.</p>
                 <p className="mt-1 text-xs leading-relaxed text-amber-100/80">Your changes may not save. Check your connection and refresh the page before trying again.</p>
+              </div>
+            </div>
+          )}
+          {databaseError && (
+            <div role="alert" className="mb-4 flex items-start gap-3 rounded-xl border border-rose-400/30 bg-rose-400/10 p-3.5 text-sm text-rose-100">
+              <WifiOff className="mt-0.5 h-5 w-5 shrink-0 text-rose-300" aria-hidden="true" />
+              <div className="min-w-0">
+                <p className="font-semibold">Some BiCircle data could not be loaded.</p>
+                <p className="mt-1 text-xs leading-relaxed text-rose-100/80">{databaseError}</p>
               </div>
             </div>
           )}
