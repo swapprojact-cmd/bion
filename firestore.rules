@@ -74,11 +74,20 @@ service cloud.firestore {
 
     match /groups/{groupId} {
       allow read: if resource.data.visibility == 'public'
-        || (signedIn() && memberOfGroup(groupId)) || moderator();
-      allow create: if signedIn() && request.resource.data.owner_id == request.auth.uid;
-      allow update: if (signedIn() && resource.data.owner_id == request.auth.uid
+        || (signedIn() && resource.data.owner_id == request.auth.uid)
+        || hasGroupMembership(groupId)
+        || moderator();
+
+      allow create: if signedIn()
+        && request.resource.data.owner_id == request.auth.uid
+        && request.resource.data.status == 'active'
+        && request.resource.data.visibility in ['public', 'private'];
+
+      allow update: if (signedIn()
+          && resource.data.owner_id == request.auth.uid
           && request.resource.data.owner_id == resource.data.owner_id)
         || moderator();
+
       allow delete: if (signedIn() && resource.data.owner_id == request.auth.uid) || admin();
     }
 
@@ -87,8 +96,14 @@ service cloud.firestore {
         membershipId.matches('^.*_' + request.auth.uid + '$')
         || resource.data.user_id == request.auth.uid
         || memberOfGroup(resource.data.group_id)
-        || (exists(/databases/$(database)/documents/groups/$(resource.data.group_id)
-            ) && get(/databases/$(database)/documents/groups/$(resource.data.group_id)).data.owner_id == request.auth.uid)
+        || (
+          exists(/databases/$(database)/documents/groups/$(resource.data.group_id))
+          && get(/databases/$(database)/documents/groups/$(resource.data.group_id)).data.owner_id == request.auth.uid
+        )
+        || (
+          exists(/databases/$(database)/documents/groups/$(resource.data.group_id))
+          && get(/databases/$(database)/documents/groups/$(resource.data.group_id)).data.visibility == 'public'
+        )
         || moderator()
       );
 
@@ -128,7 +143,10 @@ service cloud.firestore {
         );
 
       allow delete: if (signedIn() && resource.data.user_id == request.auth.uid)
-        || (signedIn() && get(/databases/$(database)/documents/groups/$(resource.data.group_id)).data.owner_id == request.auth.uid)
+        || (
+          signedIn()
+          && get(/databases/$(database)/documents/groups/$(resource.data.group_id)).data.owner_id == request.auth.uid
+        )
         || moderator();
     }
 
