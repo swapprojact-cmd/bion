@@ -374,7 +374,11 @@ export const DataService = {
     let memberships: GroupMember[] = [];
     if (uid && (!currentUserId || currentUserId === uid)) {
       const membershipSnapshot = await getDocs(query(collection(db, 'group_members'), where('user_id', '==', uid)));
-      memberships = membershipSnapshot.docs.map(snapshot => documentValue<GroupMember>(snapshot));
+      // Rejected/banned memberships must not make the whole group list fail by
+      // trying to read private group documents the account is no longer allowed to see.
+      memberships = membershipSnapshot.docs
+        .map(snapshot => documentValue<GroupMember>(snapshot))
+        .filter(membership => membership.membership_status === 'active' || membership.membership_status === 'pending');
       for (const membership of memberships) {
         if (byId.has(membership.group_id)) continue;
         const groupSnapshot = await getDoc(doc(db, 'groups', membership.group_id));
