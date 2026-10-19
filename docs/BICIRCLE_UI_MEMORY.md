@@ -13,6 +13,7 @@ BiCircle is a responsive, inclusive community app. Keep these areas clear and se
 ## Visual direction
 
 - Product name: **BiCircle**. Tagline: **Find your people. Be yourself.**
+- Use familiar Instagram-style social interaction patterns as inspiration (not copied branding/assets): compact feed header, circular people rail, clear post composer, media-forward post cards, simple reaction/comment actions, profile grids, and five-item mobile navigation.
 - Dark, calm premium interface with warm purple and pink accents; inclusive and friendly rather than overly flashy.
 - Main background: `#0E0B13`; elevated surface: `#191321`; border: `#2D233D`; primary purple: `#9B5CFF`; accent pink: `#F05AA6`; main text: `#F8F5FC`; secondary text: `#B9B0C6`.
 - Prefer restrained purple-to-pink gradients for the main CTA only. Use clear spacing, rounded cards, soft borders, simple icons, readable type, and strong visible focus states.
@@ -42,6 +43,7 @@ BiCircle is a responsive, inclusive community app. Keep these areas clear and se
 
 - Use existing React + TypeScript + Vite + Tailwind + Lucide patterns.
 - Use reusable utility classes from `src/styles/design-system.css` rather than copying slightly different card/button styles into every new page.
+- Main feed pattern: compact header → real connected-people rail → simple composer → feed filters → post cards. Never label people as having stories unless a real story feature and data model exist.
 - Preserve existing routes, component contracts, data flows, Firebase integration, and permissions when adjusting appearance.
 - Avoid fake results and hardcoded demo activity. Empty states should be honest and guide users to a next action.
 - Do not commit secrets or Firebase service-account JSON. Public Firebase web configuration is not a secret, but privileged keys are.
@@ -50,6 +52,14 @@ BiCircle is a responsive, inclusive community app. Keep these areas clear and se
 ## Page inventory to keep visually consistent
 
 `/` Landing; `/login`, `/signup`, `/forgot-password`, `/reset-password` authentication; `/feed` community feed; `/explore` circles; `/groups` joined groups; `/groups/:id` group detail; `/nearby` and legacy profile-discovery routes; `/see-your-match` opt-in matching; `/members/:id` member profile; `/friends`; `/messages`; `/notifications`; `/settings/*`; `/safety`; `/guidelines`; `/resources`; `/privacy`; `/terms`; `/about`; and permission-restricted `/moderation` and `/admin`.
+
+## Instagram-inspired interaction principles
+
+- The product can feel familiar through layout and interaction patterns, but must keep BiCircle name, visual identity, original copy, and distinct product areas.
+- Do not copy Instagram logos, exact branded marks, proprietary artwork, or imply affiliation.
+- A profile circle rail must be backed by real profile data. Do not fabricate stories, followers, post counts, online presence, recommendations, or match cards.
+- On mobile, keep Home, Explore, See Your Match, Messages, and Profile easy to reach. Keep notifications reachable from the top bar.
+- Reactions and comments should preserve existing data actions and authentication prompts.
 
 ## Acceptance checklist for future UI changes
 
