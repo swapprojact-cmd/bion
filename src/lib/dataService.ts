@@ -241,6 +241,18 @@ async function isActiveGroupMember(groupId: string, userId: string): Promise<boo
   return membership.exists() && membership.data().membership_status === 'active';
 }
 
+async function blockedIdsForVisibility(userId: string): Promise<Set<string>> {
+  const [outgoing, incoming] = await Promise.all([
+    getDocs(query(collection(db, 'blocks'), where('blocker_id', '==', userId))),
+    getDocs(query(collection(db, 'blocks'), where('blocked_id', '==', userId))),
+  ]);
+  const blockedIds = new Set<string>();
+  outgoing.docs.forEach(item => blockedIds.add(String(item.data().blocked_id || '')));
+  incoming.docs.forEach(item => blockedIds.add(String(item.data().blocker_id || '')));
+  blockedIds.delete('');
+  return blockedIds;
+}
+
 export const DataService = {
   async getNearbyProfiles(currentUserId?: string, options?: {
     maxDistanceKm?: number;
@@ -256,8 +268,7 @@ export const DataService = {
     const ownProfile = safeUserId ? await this.getProfileById(safeUserId) : null;
     const originLat = coords?.lat ?? ownProfile?.location_lat;
     const originLng = coords?.lng ?? ownProfile?.location_lng;
-    const blocks = safeUserId ? await this.getBlocks(safeUserId) : [];
-    const blockedIds = new Set(blocks.map(block => block.blocked_id));
+    const blockedIds = safeUserId ? await blockedIdsForVisibility(safeUserId) : new Set<string>();
     let list = profiles
       .filter(profile => profile.status === 'active' && profile.show_in_nearby !== false)
       .filter(profile => !safeUserId || (profile.id !== safeUserId && !blockedIds.has(profile.id)))
@@ -595,8 +606,7 @@ export const DataService = {
       }
       return { ...post, author, group, likes_count: likesCount, comments_count: commentsCount, has_liked: hasLiked };
     }));
-    const blocked = uid ? await this.getBlocks(uid) : [];
-    const blockedIds = new Set(blocked.map(block => block.blocked_id));
+    const blockedIds = uid ? await blockedIdsForVisibility(uid) : new Set<string>();
     const visible = hydrated.filter(post => !blockedIds.has(post.author_id));
     const sorted = sort === 'popular'
       ? visible.sort((a, b) => b.likes_count - a.likes_count)
@@ -803,9 +813,12 @@ export const DataService = {
 
   async removeFriendship(userA: string, userB: string): Promise<void> {
     const uid = requireSignedInUser(userA);
-    const ref = doc(db, 'friendships', friendshipDocumentId(uid, userB));
-    const snapshot = await getDoc(ref);
-    if (snapshot.exists()) await deleteDoc(ref);
+    const [forward, reverse] = await Promise.all([
+      getDocs(query(collection(db, 'friendships'), where('user_a', '==', uid), where('user_b', '==', userB))),
+      getDocs(query(collection(db, 'friendships'), where('user_a', '==', userB), where('user_b', '==', uid))),
+    ]);
+    const matches = [...forward.docs, ...reverse.docs];
+    for (const item of matches) await deleteDoc(item.ref);
     store.friendships = store.friendships.filter(item => !((item.user_a === uid && item.user_b === userB) || (item.user_a === userB && item.user_b === uid)));
     store.save();
   },
@@ -948,37 +961,50 @@ export const DataService = {
 
   async getBlocks(userId: string): Promise<Block[]> {
     const uid = requireSignedInUser(userId);
-    const [blocking, blockedBy] = await Promise.all([
-      getDocs(query(collection(db, 'blocks'), where('blocker_id', '==', uid))),
-      getDocs(query(collection(db, 'blocks'), where('blocked_id', '==', uid))),
-    ]);
-    const byId = new Map<string, Block>();
-    [...blocking.docs, ...blockedBy.docs].forEach(item => {
-      byId.set(item.id, { blocker_id: String(item.data().blocker_id), blocked_id: String(item.data().blocked_id), created_at: String(item.data().created_at || '') });
-    });
-    const blocks = [...byId.values()];
-    const withProfiles = await Promise.all(blocks.map(async block => ({ ...block, blocked_profile: await profileFromCacheOrServer(block.blocked_id) })));
-    store.blocks = blocks;
+    const snapshot = await getDocs(query(collection(db, 'blocks'), where('blocker_id', '==', uid)));
+    const blocks = await Promise.all(snapshot.docs.map(async item => {
+      const block: Block = {
+        blocker_id: String(item.data().blocker_id),
+        blocked_id: String(item.data().blocked_id),
+        created_at: String(item.data().created_at || ''),
+      };
+      return { ...block, blocked_profile: await profileFromCacheOrServer(block.blocked_id) };
+    }));
+    store.blocks = blocks.map(({ blocked_profile: _profile, ...block }) => block);
     store.save();
-    return withProfiles;
+    return blocks;
   },
 
   async blockUser(blockerId: string, blockedId: string): Promise<void> {
     const uid = requireSignedInUser(blockerId);
     if (uid === blockedId) throw new Error('You cannot block yourself.');
-    const ref = doc(db, 'blocks', uid + '_' + blockedId);
-    const existing = await getDoc(ref);
-    if (!existing.exists()) await setDoc(ref, { blocker_id: uid, blocked_id: blockedId, created_at: new Date().toISOString() });
+    const existing = await getDocs(query(
+      collection(db, 'blocks'),
+      where('blocker_id', '==', uid),
+      where('blocked_id', '==', blockedId)
+    ));
+    if (existing.empty) {
+      const now = new Date().toISOString();
+      await setDoc(doc(db, 'blocks', uid + '_' + blockedId), {
+        blocker_id: uid, blocked_id: blockedId, created_at: now,
+      });
+    }
     await this.removeFriendship(uid, blockedId);
-    store.blocks = [...store.blocks.filter(block => !(block.blocker_id === uid && block.blocked_id === blockedId)), { blocker_id: uid, blocked_id: blockedId, created_at: new Date().toISOString() }];
+    store.blocks = [
+      ...store.blocks.filter(block => !(block.blocker_id === uid && block.blocked_id === blockedId)),
+      { blocker_id: uid, blocked_id: blockedId, created_at: new Date().toISOString() },
+    ];
     store.save();
   },
 
   async unblockUser(blockerId: string, blockedId: string): Promise<void> {
     const uid = requireSignedInUser(blockerId);
-    const ref = doc(db, 'blocks', uid + '_' + blockedId);
-    const snapshot = await getDoc(ref);
-    if (snapshot.exists()) await deleteDoc(ref);
+    const snapshot = await getDocs(query(
+      collection(db, 'blocks'),
+      where('blocker_id', '==', uid),
+      where('blocked_id', '==', blockedId)
+    ));
+    for (const item of snapshot.docs) await deleteDoc(item.ref);
     store.blocks = store.blocks.filter(block => !(block.blocker_id === uid && block.blocked_id === blockedId));
     store.save();
   },
