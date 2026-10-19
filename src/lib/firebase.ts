@@ -35,14 +35,16 @@ export const storage = getStorage(app);
 export async function validateFirestoreConnection(): Promise<boolean> {
   try {
     const { doc, getDocFromServer } = await import('firebase/firestore');
+    // A permission-denied response proves the configured database was reached;
+    // the health_checks collection is intentionally not publicly readable.
     await getDocFromServer(doc(db, 'health_checks', 'client'));
     return true;
   } catch (error) {
-    const message = error instanceof Error ? error.message.toLowerCase() : '';
-    if (message.includes('offline') || message.includes('network')) {
-      console.warn('Firestore is unreachable; check project configuration and network.');
-      return false;
-    }
-    return true;
+    const code = error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code || '')
+      : '';
+    if (code === 'permission-denied') return true;
+    console.error('Firestore connection check failed:', code || error);
+    return false;
   }
 }

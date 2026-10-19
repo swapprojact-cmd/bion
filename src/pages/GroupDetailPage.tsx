@@ -24,16 +24,33 @@ export const GroupDetailPage: React.FC<GroupDetailPageProps> = ({
   const [loadingMembers, setLoadingMembers] = useState(false);
 
   const group = groups.find(g => g.id === groupId || g.slug === groupId);
+  const canViewMemberList = !!currentUser && !!group && (
+    group.visibility === 'public'
+    || group.is_member === true
+    || group.owner_id === currentUser?.id
+    || isPlatformMod
+  );
 
   useEffect(() => {
-    if (group) {
-      setLoadingMembers(true);
-      getGroupMembers(group.id).then(res => {
-        setMembers(res);
-        setLoadingMembers(false);
-      });
+    let cancelled = false;
+    if (!group || !canViewMemberList) {
+      setMembers([]);
+      setLoadingMembers(false);
+      return;
     }
-  }, [group, getGroupMembers]);
+
+    setLoadingMembers(true);
+    getGroupMembers(group.id).then(res => {
+      if (!cancelled) setMembers(res);
+    }).catch(error => {
+      console.error('Unable to load circle members:', error);
+      if (!cancelled) setMembers([]);
+    }).finally(() => {
+      if (!cancelled) setLoadingMembers(false);
+    });
+
+    return () => { cancelled = true; };
+  }, [group?.id, canViewMemberList]);
 
   if (!group) {
     return (

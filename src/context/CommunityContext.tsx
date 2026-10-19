@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   Post,
   Comment,
@@ -17,8 +17,9 @@ import {
   ModerationActionType,
   Visibility,
 } from '../types';
-import { DataService } from '../lib/dataService';
+import { DataService, clearDataSessionCache } from '../lib/dataService';
 import { useAuth } from './AuthContext';
+import { auth } from '../lib/firebase';
 
 interface CommunityContextType {
   posts: Post[];
@@ -35,6 +36,7 @@ interface CommunityContextType {
   sortFeed: 'latest' | 'popular';
   setSortFeed: (sort: 'latest' | 'popular') => void;
   isLoadingFeed: boolean;
+  databaseError: string | null;
 
   // Actions
   refreshAll: () => Promise<void>;
@@ -105,55 +107,99 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [moderationActions, setModerationActions] = useState<ModerationAction[]>([]);
   const [sortFeed, setSortFeed] = useState<'latest' | 'popular'>('latest');
   const [isLoadingFeed, setIsLoadingFeed] = useState<boolean>(false);
+  const [databaseError, setDatabaseError] = useState<string | null>(null);
+  const lastLoadedUid = useRef<string | null>(null);
+  const refreshGeneration = useRef(0);
+
+  const clearCommunityState = () => {
+    setPosts([]);
+    setGroups([]);
+    setFriends([]);
+    setIncomingRequests([]);
+    setOutgoingRequests([]);
+    setConversations([]);
+    setNotifications([]);
+    setBlockedUsers([]);
+    setReports([]);
+    setModerationActions([]);
+  };
 
   const refreshAll = useCallback(async () => {
-    if (!currentUser) return;
+    const activeUser = currentUser;
+    if (!activeUser) {
+      refreshGeneration.current += 1;
+      lastLoadedUid.current = null;
+      clearDataSessionCache();
+      clearCommunityState();
+      setDatabaseError(null);
+      setIsLoadingFeed(false);
+      return;
+    }
+
+    const uid = activeUser.id;
+    if (lastLoadedUid.current !== uid) {
+      lastLoadedUid.current = uid;
+      clearDataSessionCache();
+      clearCommunityState();
+      setDatabaseError(null);
+    }
+
+    const generation = ++refreshGeneration.current;
+    setDatabaseError(null);
     setIsLoadingFeed(true);
     try {
-      const [
-        loadedPosts,
-        loadedGroups,
-        loadedFriends,
-        loadedReqs,
-        loadedConvs,
-        loadedNotifs,
-        loadedBlocks,
-        loadedReps,
-        loadedActions,
-      ] = await Promise.all([
-        DataService.getPosts({ currentUserId: currentUser.id, sort: sortFeed }),
-        DataService.getGroups(currentUser.id),
-        DataService.getFriendships(currentUser.id),
-        DataService.getFriendRequests(currentUser.id),
-        DataService.getConversations(currentUser.id),
-        DataService.getNotifications(currentUser.id),
-        DataService.getBlocks(currentUser.id),
-        currentUser.is_moderator || currentUser.is_admin ? DataService.getReports() : Promise.resolve([]),
-        currentUser.is_moderator || currentUser.is_admin ? DataService.getModerationActions() : Promise.resolve([]),
+      const results = await Promise.allSettled([
+        DataService.getPosts({ currentUserId: uid, sort: sortFeed }),
+        DataService.getGroups(uid),
+        DataService.getFriendships(uid),
+        DataService.getFriendRequests(uid),
+        DataService.getConversations(uid),
+        DataService.getNotifications(uid),
+        DataService.getBlocks(uid),
+        activeUser.is_moderator || activeUser.is_admin ? DataService.getReports() : Promise.resolve([] as Report[]),
+        activeUser.is_moderator || activeUser.is_admin ? DataService.getModerationActions() : Promise.resolve([] as ModerationAction[]),
       ]);
 
-      setPosts(loadedPosts);
-      setGroups(loadedGroups);
-      setFriends(loadedFriends);
-      setIncomingRequests(loadedReqs.incoming);
-      setOutgoingRequests(loadedReqs.outgoing);
-      setConversations(loadedConvs);
-      setNotifications(loadedNotifs);
-      setBlockedUsers(loadedBlocks);
-      setReports(loadedReps);
-      setModerationActions(loadedActions);
-    } catch (err) {
-      console.error('Failed to load community state:', err);
+      // Never let a stale account request replace the current UI.
+      if (generation !== refreshGeneration.current || auth.currentUser?.uid !== uid) return;
+
+      // Let healthy collections render even if one unrelated collection is denied or lacks an index.
+      setPosts(results[0].status === 'fulfilled' ? results[0].value : []);
+      setGroups(results[1].status === 'fulfilled' ? results[1].value : []);
+      setFriends(results[2].status === 'fulfilled' ? results[2].value : []);
+      setIncomingRequests(results[3].status === 'fulfilled' ? results[3].value.incoming : []);
+      setOutgoingRequests(results[3].status === 'fulfilled' ? results[3].value.outgoing : []);
+      setConversations(results[4].status === 'fulfilled' ? results[4].value : []);
+      setNotifications(results[5].status === 'fulfilled' ? results[5].value : []);
+      setBlockedUsers(results[6].status === 'fulfilled' ? results[6].value : []);
+      setReports(results[7].status === 'fulfilled' ? results[7].value : []);
+      setModerationActions(results[8].status === 'fulfilled' ? results[8].value : []);
+
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failures.length > 0) {
+        const firstError = failures[0].reason;
+        const code = firstError && typeof firstError === 'object' && 'code' in firstError
+          ? String((firstError as { code?: unknown }).code || '')
+          : '';
+        console.error('Some Firestore collections failed to load:', failures.map(item => item.reason));
+        if (code === 'permission-denied') {
+          setDatabaseError('Some cloud data was blocked by Firestore rules for this account. Other sections have loaded; review the rule permissions.');
+        } else if (code === 'failed-precondition') {
+          setDatabaseError('Some cloud data needs a Firestore index or configuration update. Other sections have loaded.');
+        } else {
+          setDatabaseError('Some cloud data could not be loaded. Other sections have loaded; check your connection and refresh.');
+        }
+      } else {
+        setDatabaseError(null);
+      }
     } finally {
-      setIsLoadingFeed(false);
+      if (generation === refreshGeneration.current) setIsLoadingFeed(false);
     }
   }, [currentUser, sortFeed]);
 
   useEffect(() => {
-    if (currentUser) {
-      refreshAll();
-    }
-  }, [currentUser, refreshAll]);
+    void refreshAll();
+  }, [refreshAll]);
 
   // Feed Actions
   const createPost = async (
@@ -404,6 +450,7 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         sortFeed,
         setSortFeed,
         isLoadingFeed,
+        databaseError,
         refreshAll,
         createPost,
         deletePost,

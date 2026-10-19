@@ -2,30 +2,57 @@ rules_version = '2';
 
 service firebase.storage {
   match /b/{bucket}/o {
-    function signedIn() { return request.auth != null; }
-    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
     function validImage(maxBytes) {
-      return request.resource != null && request.resource.size > 0
+      return request.resource != null
+        && request.resource.size > 0
         && request.resource.size <= maxBytes
         && request.resource.contentType.matches('image/(jpeg|png|webp)');
     }
+
+    function validPostMedia(maxBytes) {
+      return request.resource != null
+        && request.resource.size > 0
+        && request.resource.size <= maxBytes
+        && request.resource.contentType.matches('(image/(jpeg|png|webp)|video/(mp4|webm|quicktime))');
+    }
+
     match /users/{uid}/avatars/{fileName} {
       allow read: if true;
       allow create, update: if isOwner(uid) && validImage(5 * 1024 * 1024);
       allow delete: if isOwner(uid);
     }
+
     match /users/{uid}/posts/{fileName} {
+      // Post media is uploaded by its owner. The post's Firestore visibility rule
+      // controls which members can discover the post; shared private media URLs
+      // still need backend/token policy if stricter per-viewer media privacy is required.
       allow read: if signedIn();
-      allow create, update: if isOwner(uid) && validImage(10 * 1024 * 1024);
+      allow create, update: if isOwner(uid) && validPostMedia(
+        request.resource.contentType.matches('video/.*') ? 50 * 1024 * 1024 : 10 * 1024 * 1024
+      );
       allow delete: if isOwner(uid);
     }
+
+    // Storage rules can query only Firestore's default database. This project
+    // uses a named Firestore database, so avoid a false membership check against
+    // (default). Keep group media owner-only until shared group media has a
+    // backend authorization path that checks the named database correctly.
     match /groups/{groupId}/{uid}/{fileName} {
-      allow read: if signedIn() && request.auth.uid in firestore.get(/databases/(default)/documents/groups/$(groupId)).data.memberIds;
-      allow create, update: if isOwner(uid)
-        && request.auth.uid in firestore.get(/databases/(default)/documents/groups/$(groupId)).data.memberIds
-        && validImage(10 * 1024 * 1024);
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid) && validPostMedia(10 * 1024 * 1024);
       allow delete: if isOwner(uid);
     }
-    match /{allPaths=**} { allow read, write: if false; }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
   }
 }

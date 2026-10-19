@@ -15,6 +15,8 @@ import {
 import { Avatar } from '../common/Avatar';
 import { useAuth } from '../../context/AuthContext';
 import { useCommunity } from '../../context/CommunityContext';
+import { storage } from '../../lib/firebase';
+import { getDownloadURL, ref as storageRef, uploadBytes } from 'firebase/storage';
 
 interface CreatePostCardProps {
   defaultGroupId?: string | null;
@@ -36,6 +38,7 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
   const [mediaType, setMediaType] = useState<'photo' | 'video'>('photo');
   const [mediaUrl, setMediaUrl] = useState('');
   const [mediaFilePreview, setMediaFilePreview] = useState<string | null>(null);
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaFileName, setMediaFileName] = useState<string | null>(null);
   const [locationTag, setLocationTag] = useState<string>('');
   const [showLocationInput, setShowLocationInput] = useState(false);
@@ -53,29 +56,42 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
     if (!file) return;
 
     const isVideo = file.type.startsWith('video/');
+    const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/webm', 'video/quicktime']);
+    const maxBytes = isVideo ? 50 * 1024 * 1024 : 10 * 1024 * 1024;
+    if (!allowedTypes.has(file.type)) {
+      setError('Choose a JPG, PNG, WebP, MP4, WebM, or MOV file.');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > maxBytes) {
+      setError(isVideo ? 'Videos must be 50 MB or smaller.' : 'Photos must be 10 MB or smaller.');
+      e.target.value = '';
+      return;
+    }
+
+    setError(null);
+    if (mediaFilePreview?.startsWith('blob:')) URL.revokeObjectURL(mediaFilePreview);
     setMediaType(isVideo ? 'video' : 'photo');
     setMediaFileName(file.name);
+    setMediaFile(file);
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setMediaFilePreview(reader.result);
-        setMediaUrl(reader.result); // store as data URL for persistent rendering
-      }
-    };
-    reader.readAsDataURL(file);
+    // A browser object URL is only for the local preview. The actual file is
+    // uploaded to Storage; Firestore stores only the resulting download URL.
+    setMediaFilePreview(URL.createObjectURL(file));
   };
 
   const clearMedia = () => {
     setMediaUrl('');
+    if (mediaFilePreview?.startsWith('blob:')) URL.revokeObjectURL(mediaFilePreview);
     setMediaFilePreview(null);
+    setMediaFile(null);
     setMediaFileName(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!body.trim() && !mediaUrl) return;
+    if (!body.trim() && !mediaUrl && !mediaFile) return;
 
     // Safety check against blatant romantic/hookup solicitations
     const lower = body.toLowerCase();
@@ -95,9 +111,21 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
     setError(null);
 
     try {
-      const isVideo = mediaType === 'video' && mediaUrl.trim().length > 0;
-      const media = !isVideo && mediaUrl.trim() ? [mediaUrl.trim()] : [];
-      const video = isVideo ? mediaUrl.trim() : undefined;
+      let resolvedMediaUrl = mediaUrl.trim();
+      if (mediaFile) {
+        const safeFileName = mediaFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const path = `users/${currentUser.id}/posts/${crypto.randomUUID()}-${safeFileName}`;
+        const targetRef = storageRef(storage, path);
+        await uploadBytes(targetRef, mediaFile, {
+          contentType: mediaFile.type,
+          customMetadata: { ownerUid: currentUser.id },
+        });
+        resolvedMediaUrl = await getDownloadURL(targetRef);
+      }
+
+      const isVideo = mediaType === 'video' && resolvedMediaUrl.length > 0;
+      const media = !isVideo && resolvedMediaUrl ? [resolvedMediaUrl] : [];
+      const video = isVideo ? resolvedMediaUrl : undefined;
 
       // Append location tag to post if specified
       let finalBody = body.trim();
@@ -393,7 +421,7 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
               {/* Submit button */}
               <button
                 type="submit"
-                disabled={isSubmitting || (!body.trim() && !mediaUrl)}
+                disabled={isSubmitting || (!body.trim() && !mediaUrl && !mediaFile)}
                 className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-[#9B5CFF] to-[#F05AA6] hover:opacity-95 text-white text-xs font-semibold rounded-xl shadow-lg shadow-[#9B5CFF]/20 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <span>{isSubmitting ? 'Posting...' : 'Share with Circle'}</span>
