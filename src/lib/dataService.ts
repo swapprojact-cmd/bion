@@ -563,8 +563,13 @@ export const DataService = {
         await fetchWith([...base, where('visibility', '==', 'group_only'), where('group_id', '==', groupId)]);
       }
       if (uid && authorId && !groupId) {
-        const friendship = await getDoc(doc(db, 'friendships', friendshipDocumentId(uid, authorId)));
-        if (friendship.exists()) await fetchWith([...base, where('visibility', '==', 'friends_only'), where('author_id', '==', authorId)]);
+        const [friendshipA, friendshipB] = await Promise.all([
+          getDocs(query(collection(db, 'friendships'), where('user_a', '==', uid), where('user_b', '==', authorId))),
+          getDocs(query(collection(db, 'friendships'), where('user_a', '==', authorId), where('user_b', '==', uid))),
+        ]);
+        if (friendshipA.size || friendshipB.size) {
+          await fetchWith([...base, where('visibility', '==', 'friends_only'), where('author_id', '==', authorId)]);
+        }
       } else if (uid && !groupId && !authorId) {
         const friends = await this.getFriendships(uid);
         for (const friend of friends) await fetchWith([...base, where('visibility', '==', 'friends_only'), where('author_id', '==', friend.id)]);
@@ -736,14 +741,15 @@ export const DataService = {
   async sendFriendRequest(senderId: string, recipientId: string): Promise<FriendRequest> {
     const uid = requireSignedInUser(senderId);
     if (uid === recipientId) throw new Error('Cannot send a friend request to yourself.');
-    const [forward, reverse, existingFriend, recipient] = await Promise.all([
+    const [forward, reverse, friendshipA, friendshipB, recipient] = await Promise.all([
       getDocs(query(collection(db, 'friend_requests'), where('sender_id', '==', uid), where('recipient_id', '==', recipientId), where('status', '==', 'pending'))),
       getDocs(query(collection(db, 'friend_requests'), where('sender_id', '==', recipientId), where('recipient_id', '==', uid), where('status', '==', 'pending'))),
-      getDoc(doc(db, 'friendships', friendshipDocumentId(uid, recipientId))),
+      getDocs(query(collection(db, 'friendships'), where('user_a', '==', uid), where('user_b', '==', recipientId))),
+      getDocs(query(collection(db, 'friendships'), where('user_a', '==', recipientId), where('user_b', '==', uid))),
       this.getProfileById(recipientId),
     ]);
     if (forward.size || reverse.size) throw new Error('A friend request is already pending.');
-    if (existingFriend.exists()) throw new Error('You are already friends.');
+    if (friendshipA.size || friendshipB.size) throw new Error('You are already friends.');
     if (!recipient) throw new Error('This profile is no longer available.');
     const now = new Date().toISOString();
     const ref = doc(collection(db, 'friend_requests'));
@@ -770,6 +776,7 @@ export const DataService = {
         id: friendshipId,
         user_a: request.sender_id < request.recipient_id ? request.sender_id : request.recipient_id,
         user_b: request.sender_id < request.recipient_id ? request.recipient_id : request.sender_id,
+        accepted_request_id: requestId,
         created_at: now,
       });
     });
