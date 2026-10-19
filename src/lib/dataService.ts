@@ -315,6 +315,7 @@ export const DataService = {
   },
 
   async getProfiles(): Promise<Profile[]> {
+    const sessionUid = auth.currentUser?.uid ?? null;
     const publicSnapshot = await getDocs(query(collection(db, 'profiles'), where('visibility', '==', 'public'), where('status', '==', 'active')));
     const results = new Map<string, Profile>();
     publicSnapshot.docs.forEach(snapshot => {
@@ -322,7 +323,7 @@ export const DataService = {
       results.set(profile.id, profile);
     });
 
-    const uid = auth.currentUser?.uid;
+    const uid = sessionUid;
     if (uid) {
       const membersSnapshot = await getDocs(query(collection(db, 'profiles'), where('visibility', '==', 'members_only'), where('status', '==', 'active')));
       membersSnapshot.docs.forEach(snapshot => {
@@ -336,20 +337,23 @@ export const DataService = {
       }
     }
     const profiles = [...results.values()];
-    for (const profile of profiles) profileServerCache.set(profileCacheKey(profile.id), profile);
+    if (!sessionIsCurrent(sessionUid)) return [];
+    for (const profile of profiles) profileServerCache.set(profileCacheKey(profile.id, sessionUid), profile);
     store.profiles = profiles;
     store.save();
     return profiles;
   },
 
   async getProfileById(id: string): Promise<Profile | null> {
+    const sessionUid = auth.currentUser?.uid ?? null;
     const snapshot = await getDoc(doc(db, 'profiles', id));
+    if (!sessionIsCurrent(sessionUid)) return null;
     if (!snapshot.exists()) {
-      profileServerCache.delete(profileCacheKey(id));
+      profileServerCache.delete(profileCacheKey(id, sessionUid));
       return null;
     }
     const profile = documentValue<Profile>(snapshot);
-    profileServerCache.set(profileCacheKey(id), profile);
+    profileServerCache.set(profileCacheKey(id, sessionUid), profile);
     store.profiles = cacheById(store.profiles, profile);
     return profile;
   },
@@ -395,10 +399,11 @@ export const DataService = {
   },
 
   async getGroups(currentUserId?: string): Promise<Group[]> {
+    const sessionUid = auth.currentUser?.uid ?? null;
     const publicSnapshot = await getDocs(query(collection(db, 'groups'), where('visibility', '==', 'public'), where('status', '==', 'active')));
     const byId = new Map<string, Group>();
     publicSnapshot.docs.forEach(snapshot => byId.set(snapshot.id, documentValue<Group>(snapshot)));
-    const uid = auth.currentUser?.uid;
+    const uid = sessionUid;
     let memberships: GroupMember[] = [];
     if (uid && (!currentUserId || currentUserId === uid)) {
       const membershipSnapshot = await getDocs(query(collection(db, 'group_members'), where('user_id', '==', uid)));
@@ -426,7 +431,8 @@ export const DataService = {
       const membership = membershipByGroup.get(group.id);
       groups.push({ ...group, member_count: memberCount, is_member: membership?.membership_status === 'active', membership_status: membership?.membership_status, user_role: membership?.role });
     }
-    for (const group of groups) groupServerCache.set(groupCacheKey(group.id), group);
+    if (!sessionIsCurrent(sessionUid)) return [];
+    for (const group of groups) groupServerCache.set(groupCacheKey(group.id, sessionUid), group);
     store.groups = groups;
     store.groupMembers = memberships;
     store.save();
@@ -450,12 +456,14 @@ export const DataService = {
   },
 
   async getGroupMembers(groupId: string): Promise<GroupMember[]> {
+    const sessionUid = auth.currentUser?.uid ?? null;
     const snapshot = await getDocs(query(collection(db, 'group_members'), where('group_id', '==', groupId)));
     const members = await Promise.all(snapshot.docs.map(async item => {
       const member = documentValue<GroupMember>(item);
       const profile = await this.getProfileById(member.user_id);
       return { ...member, profile: profile || undefined };
     }));
+    if (!sessionIsCurrent(sessionUid)) return [];
     store.groupMembers = [...store.groupMembers.filter(member => member.group_id !== groupId), ...members];
     store.save();
     return members;
@@ -707,11 +715,13 @@ export const DataService = {
   },
 
   async getComments(postId: string): Promise<Comment[]> {
+    const sessionUid = auth.currentUser?.uid ?? null;
     const snapshot = await getDocs(query(collection(db, 'comments'), where('post_id', '==', postId), where('status', '==', 'published'), orderBy('created_at', 'asc')));
     const comments = await Promise.all(snapshot.docs.map(async item => {
       const comment = documentValue<Comment>(item);
       return { ...comment, author: await profileFromCacheOrServer(comment.author_id) };
     }));
+    if (!sessionIsCurrent(sessionUid)) return [];
     store.comments = [...store.comments.filter(comment => comment.post_id !== postId), ...comments];
     store.save();
     return comments;
