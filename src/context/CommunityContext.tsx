@@ -143,6 +143,7 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setDatabaseError(null);
     }
 
+    const activeUser = currentUser;
     const generation = ++refreshGeneration.current;
     setDatabaseError(null);
     setIsLoadingFeed(true);
@@ -158,7 +159,7 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         loadedReps,
         loadedActions,
       ] = await Promise.all([
-        DataService.getPosts({ currentUserId: currentUser.id, sort: sortFeed }),
+        DataService.getPosts({ currentUserId: activeUser.id, sort: sortFeed }),
         DataService.getGroups(currentUser.id),
         DataService.getFriendships(currentUser.id),
         DataService.getFriendRequests(currentUser.id),
