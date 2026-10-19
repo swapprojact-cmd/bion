@@ -1,7 +1,7 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { Profile, UserPrivate } from '../types';
-import { DataService, store } from '../lib/dataService';
+import { DataService, store, clearDataSessionCache } from '../lib/dataService';
 import { auth, db, validateFirestoreConnection } from '../lib/firebase';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, deleteUser, type User } from 'firebase/auth';
 import { doc, setDoc, writeBatch } from 'firebase/firestore';
@@ -30,6 +30,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [userPrivate, setUserPrivate] = useState<UserPrivate | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [firebaseConnected, setFirebaseConnected] = useState<boolean | null>(null);
+  const activeFirebaseUid = useRef<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -40,6 +41,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // Firebase Auth is the source of truth; never restore a session from a client-controlled user ID.
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      const nextUid = firebaseUser?.uid || null;
+      if (activeFirebaseUid.current !== nextUid) {
+        clearDataSessionCache();
+        activeFirebaseUid.current = nextUid;
+        setCurrentUser(null);
+        setUserPrivate(null);
+      }
       setIsLoading(true);
       try {
         if (!firebaseUser) {
