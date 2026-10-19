@@ -15,13 +15,26 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
+
+      - name: Set up Java for Firebase Emulators
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
       - name: Install dependencies
         run: npm install
+
+      - name: Validate Firestore and Storage rules in emulators
+        run: npx --yes firebase-tools emulators:exec --only firestore,storage --project demo-bicircle-rules "node -e 'process.exit(0)'"
+
       - name: TypeScript check
         run: npm run lint
+
       - name: Build production frontend
         run: npm run build
