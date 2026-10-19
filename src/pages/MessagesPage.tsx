@@ -66,8 +66,8 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
   };
 
   return (
-    <div className="py-4 h-[calc(100vh-6rem)] flex flex-col">
-      <div className="flex-1 bg-[#191321] border border-[#2D233D] rounded-2xl overflow-hidden flex shadow-xl">
+    <div className="bc-page mx-auto max-w-6xl !py-3 flex h-[calc(100dvh-8rem)] min-h-[32rem] flex-col lg:h-[calc(100dvh-5rem)]">
+      <div className="bc-panel flex-1 overflow-hidden flex shadow-xl">
         {/* Conversations List (Sidebar on desktop, hidden on mobile when viewing active conversation) */}
         <div
           className={`w-full md:w-80 border-r border-[#2D233D] flex flex-col bg-[#0E0B13]/60 ${
@@ -206,7 +206,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                   placeholder={`Message ${otherMember.display_name}...`}
                   value={inputBody}
                   onChange={(e) => setInputBody(e.target.value)}
-                  className="flex-1 px-4 py-2.5 bg-[#0E0B13] border border-[#2D233D] rounded-xl text-xs text-[#F8F5FC] focus:outline-none focus:border-[#9B5CFF]"
+                  className="bc-field flex-1 text-sm"
                 />
                 <button
                   type="submit"
