@@ -70,22 +70,19 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
     }
 
     setError(null);
+    if (mediaFilePreview?.startsWith('blob:')) URL.revokeObjectURL(mediaFilePreview);
     setMediaType(isVideo ? 'video' : 'photo');
     setMediaFileName(file.name);
     setMediaFile(file);
 
-    // This data URL is for the local preview only. Uploads are stored in Firebase Storage,
-    // and only the resulting download URL is saved on the Firestore post document.
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') setMediaFilePreview(reader.result);
-    };
-    reader.onerror = () => setError('Could not preview this file. Please choose it again.');
-    reader.readAsDataURL(file);
+    // A browser object URL is only for the local preview. The actual file is
+    // uploaded to Storage; Firestore stores only the resulting download URL.
+    setMediaFilePreview(URL.createObjectURL(file));
   };
 
   const clearMedia = () => {
     setMediaUrl('');
+    if (mediaFilePreview?.startsWith('blob:')) URL.revokeObjectURL(mediaFilePreview);
     setMediaFilePreview(null);
     setMediaFile(null);
     setMediaFileName(null);
