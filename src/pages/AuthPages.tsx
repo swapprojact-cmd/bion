@@ -97,7 +97,7 @@ export const AuthPages: React.FC<AuthPagesProps> = ({ mode, navigate }) => {
   };
 
   return (
-    <div className="max-w-md mx-auto px-4 py-12 text-[#F8F5FC]">
+    <div className="bc-page mx-auto max-w-md px-4 !py-8 text-[#F8F5FC] sm:!py-12">
       <button
         onClick={() => navigate('/')}
         className="flex items-center gap-2 text-xs text-[#B9B0C6] hover:text-white transition-colors mb-6 cursor-pointer"
@@ -105,7 +105,7 @@ export const AuthPages: React.FC<AuthPagesProps> = ({ mode, navigate }) => {
         <ArrowLeft className="w-4 h-4" /> Home
       </button>
 
-      <div className="bg-[#191321] border border-[#2D233D] rounded-2xl p-6 sm:p-8 shadow-xl">
+      <div className="bc-panel p-5 shadow-xl sm:p-8">
         {/* Brand header */}
         <div className="text-center mb-6">
           <div className="inline-flex w-12 h-12 rounded-2xl bg-[#0E0B13] border border-[#3D2E55] items-center justify-center p-2 mb-3 shadow-md shadow-[#9B5CFF]/10">
@@ -157,7 +157,7 @@ export const AuthPages: React.FC<AuthPagesProps> = ({ mode, navigate }) => {
                   placeholder="maya@example.com or mayawrites"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full pl-10 pr-3.5 py-2.5 bg-[#0E0B13] border border-[#2D233D] rounded-xl text-sm focus:outline-none focus:border-[#9B5CFF] text-[#F8F5FC]"
+                  className="bc-field pl-10 text-sm"
                 />
               </div>
             </div>
@@ -191,7 +191,7 @@ export const AuthPages: React.FC<AuthPagesProps> = ({ mode, navigate }) => {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-2.5 bg-gradient-to-r from-[#9B5CFF] to-[#F05AA6] hover:opacity-95 text-white text-xs font-semibold rounded-xl shadow-lg shadow-[#9B5CFF]/20 transition-all cursor-pointer disabled:opacity-50"
+              className="bc-primary-button w-full disabled:opacity-50"
             >
               {loading ? 'Authenticating...' : 'Sign In'}
             </button>
@@ -242,7 +242,7 @@ export const AuthPages: React.FC<AuthPagesProps> = ({ mode, navigate }) => {
                 placeholder="e.g. jordan_r"
                 value={username}
                 onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
-                className="w-full px-3.5 py-2.5 bg-[#0E0B13] border border-[#2D233D] rounded-xl text-sm focus:outline-none focus:border-[#9B5CFF] text-[#F8F5FC]"
+                className="bc-field text-sm"
               />
             </div>
 
