@@ -227,7 +227,7 @@ export const MemberProfilePage: React.FC<MemberProfilePageProps> = ({
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 py-4">
+    <div className="bc-page mx-auto max-w-4xl space-y-5">
       {/* Navigation top bar */}
       <div className="flex items-center justify-between">
         <button
@@ -252,7 +252,7 @@ export const MemberProfilePage: React.FC<MemberProfilePageProps> = ({
       )}
 
       {/* Profile Header Card */}
-      <div className="bg-[#191321] border border-[#2D233D] rounded-2xl p-6 sm:p-8 space-y-6 shadow-xl relative overflow-hidden">
+      <div className="bc-panel relative space-y-6 overflow-hidden p-4 pt-7 shadow-xl sm:p-8 sm:pt-10">
         {/* Subtle decorative gradient top bar */}
         <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-[#9B5CFF] via-[#F05AA6] to-[#9B5CFF]" />
 
