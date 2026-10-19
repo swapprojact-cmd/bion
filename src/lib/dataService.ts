@@ -83,44 +83,50 @@ class CommunityDataStore {
   reload() {
     // Start empty by default. Remove only records shipped as demo fixtures,
     // while preserving real locally-created records for this browser.
-    const withoutSeedRecords = <T extends { id: string }>(items: T[], seeds: T[]): T[] => {
-      const seedIds = new Set(seeds.map(item => item.id));
-      return items.filter(item => !seedIds.has(item.id));
+    const withoutSeedRecords = <T>(items: T[], seeds: T[], getKey: (item: T) => string): T[] => {
+      const seedKeys = new Set(seeds.map(getKey));
+      return items.filter(item => !seedKeys.has(getKey(item)));
     };
 
     this.profiles = withoutSeedRecords(
       getStored<Profile[]>('profiles', []),
-      INITIAL_PROFILES
+      INITIAL_PROFILES,
+      item => item.id
     );
     const privateUsers = getStored<Record<string, UserPrivate>>('userPrivate', {});
     this.userPrivateMap = { ...privateUsers };
     delete this.userPrivateMap.usr_maya;
 
-    this.groups = withoutSeedRecords(getStored<Group[]>('groups', []), INITIAL_GROUPS);
+    this.groups = withoutSeedRecords(getStored<Group[]>('groups', []), INITIAL_GROUPS, item => item.id);
     this.groupMembers = withoutSeedRecords(
       getStored<GroupMember[]>('groupMembers', []),
-      INITIAL_GROUP_MEMBERS
+      INITIAL_GROUP_MEMBERS,
+      item => `${item.group_id}:${item.user_id}`
     );
-    this.posts = withoutSeedRecords(getStored<Post[]>('posts', []), INITIAL_POSTS);
-    this.comments = withoutSeedRecords(getStored<Comment[]>('comments', []), INITIAL_COMMENTS);
-    this.friendships = withoutSeedRecords(getStored<Friendship[]>('friendships', []), INITIAL_FRIENDSHIPS);
+    this.posts = withoutSeedRecords(getStored<Post[]>('posts', []), INITIAL_POSTS, item => item.id);
+    this.comments = withoutSeedRecords(getStored<Comment[]>('comments', []), INITIAL_COMMENTS, item => item.id);
+    this.friendships = withoutSeedRecords(getStored<Friendship[]>('friendships', []), INITIAL_FRIENDSHIPS, item => item.id);
     this.friendRequests = withoutSeedRecords(
       getStored<FriendRequest[]>('friendRequests', []),
-      INITIAL_FRIEND_REQUESTS
+      INITIAL_FRIEND_REQUESTS,
+      item => item.id
     );
     this.conversations = withoutSeedRecords(
       getStored<Conversation[]>('conversations', []),
-      INITIAL_CONVERSATIONS
+      INITIAL_CONVERSATIONS,
+      item => item.id
     );
-    this.messages = withoutSeedRecords(getStored<Message[]>('messages', []), INITIAL_MESSAGES);
+    this.messages = withoutSeedRecords(getStored<Message[]>('messages', []), INITIAL_MESSAGES, item => item.id);
     this.notifications = withoutSeedRecords(
       getStored<Notification[]>('notifications', []),
-      INITIAL_NOTIFICATIONS
+      INITIAL_NOTIFICATIONS,
+      item => item.id
     );
-    this.reports = withoutSeedRecords(getStored<Report[]>('reports', []), INITIAL_REPORTS);
+    this.reports = withoutSeedRecords(getStored<Report[]>('reports', []), INITIAL_REPORTS, item => item.id);
     this.moderationActions = withoutSeedRecords(
       getStored<ModerationAction[]>('moderationActions', []),
-      INITIAL_MODERATION_ACTIONS
+      INITIAL_MODERATION_ACTIONS,
+      item => item.id
     );
     this.blocks = getStored<Block[]>('blocks', []);
   }
