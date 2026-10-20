@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Image,
   Send,
@@ -15,6 +15,7 @@ import {
 import { Avatar } from '../common/Avatar';
 import { useAuth } from '../../context/AuthContext';
 import { useCommunity } from '../../context/CommunityContext';
+import { deleteUploadedFile, uploadPostImage, uploadPostVideo } from '../../lib/storageService';
 
 interface CreatePostCardProps {
   defaultGroupId?: string | null;
@@ -35,6 +36,7 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
   const [mediaTab, setMediaTab] = useState<'upload' | 'url'>('upload');
   const [mediaType, setMediaType] = useState<'photo' | 'video'>('photo');
   const [mediaUrl, setMediaUrl] = useState('');
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaFilePreview, setMediaFilePreview] = useState<string | null>(null);
   const [mediaFileName, setMediaFileName] = useState<string | null>(null);
   const [locationTag, setLocationTag] = useState<string>('');
@@ -48,26 +50,44 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
 
   if (!currentUser) return null;
 
+  useEffect(() => {
+    if (!mediaFilePreview || !mediaFilePreview.startsWith('blob:')) return;
+    return () => URL.revokeObjectURL(mediaFilePreview);
+  }, [mediaFilePreview]);
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const isVideo = file.type.startsWith('video/');
-    setMediaType(isVideo ? 'video' : 'photo');
-    setMediaFileName(file.name);
+    const isImage = ['image/jpeg', 'image/png', 'image/webp'].includes(file.type);
+    if (!isVideo && !isImage) {
+      setError('Choose a JPG, PNG, WebP, MP4, WebM, or MOV file.');
+      e.target.value = '';
+      return;
+    }
+    if (isVideo && file.size > 50 * 1024 * 1024) {
+      setError('Video must be smaller than 50 MB.');
+      e.target.value = '';
+      return;
+    }
+    if (isImage && file.size > 10 * 1024 * 1024) {
+      setError('Image must be smaller than 10 MB.');
+      e.target.value = '';
+      return;
+    }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setMediaFilePreview(reader.result);
-        setMediaUrl(reader.result); // store as data URL for persistent rendering
-      }
-    };
-    reader.readAsDataURL(file);
+    setError(null);
+    setMediaType(isVideo ? 'video' : 'photo');
+    setMediaFile(file);
+    setMediaUrl('');
+    setMediaFileName(file.name);
+    setMediaFilePreview(URL.createObjectURL(file));
   };
 
   const clearMedia = () => {
     setMediaUrl('');
+    setMediaFile(null);
     setMediaFilePreview(null);
     setMediaFileName(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -75,7 +95,7 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!body.trim() && !mediaUrl) return;
+    if (!body.trim() && !mediaUrl && !mediaFile) return;
 
     // Safety check against blatant romantic/hookup solicitations
     const lower = body.toLowerCase();
@@ -94,10 +114,19 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
     setIsSubmitting(true);
     setError(null);
 
+    let uploadedStoragePath: string | null = null;
     try {
-      const isVideo = mediaType === 'video' && mediaUrl.trim().length > 0;
-      const media = !isVideo && mediaUrl.trim() ? [mediaUrl.trim()] : [];
-      const video = isVideo ? mediaUrl.trim() : undefined;
+      let finalMediaUrl = mediaUrl.trim();
+      const isVideo = mediaFile ? mediaFile.type.startsWith('video/') : mediaType === 'video' && finalMediaUrl.length > 0;
+      if (mediaFile) {
+        const uploaded = isVideo
+          ? await uploadPostVideo(currentUser.id, mediaFile)
+          : await uploadPostImage(currentUser.id, mediaFile);
+        uploadedStoragePath = uploaded.path;
+        finalMediaUrl = uploaded.url;
+      }
+      const media = !isVideo && finalMediaUrl ? [finalMediaUrl] : [];
+      const video = isVideo ? finalMediaUrl : undefined;
 
       // Append location tag to post if specified
       let finalBody = body.trim();
@@ -115,6 +144,7 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
         locationTag.trim() || undefined
       );
 
+      uploadedStoragePath = null; // The Firestore post now owns this uploaded media.
       setBody('');
       clearMedia();
       setLocationTag('');
@@ -123,6 +153,9 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
       setShowLocationInput(false);
       if (onPostCreated) onPostCreated();
     } catch (err: any) {
+      if (uploadedStoragePath) {
+        void deleteUploadedFile(uploadedStoragePath).catch(cleanupError => console.warn('Could not clean up an unlinked upload:', cleanupError));
+      }
       setError(err.message || 'Failed to publish post');
     } finally {
       setIsSubmitting(false);
@@ -167,7 +200,7 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setMediaTab('url')}
+                      onClick={() => { setMediaTab('url'); setMediaFile(null); setMediaFilePreview(null); setMediaFileName(null); }}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
                         mediaTab === 'url'
                           ? 'bg-[#9B5CFF] text-white shadow-sm'
@@ -196,7 +229,7 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept="image/*,video/*"
+                      accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,video/quicktime"
                       onChange={handleFileChange}
                       className="hidden"
                       id="feed-post-file-input"
@@ -284,8 +317,11 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
                       }
                       value={mediaUrl}
                       onChange={(e) => {
+                        setMediaFile(null);
+                        setMediaFileName(null);
                         setMediaUrl(e.target.value);
                         setMediaFilePreview(e.target.value);
+                        if (fileInputRef.current) fileInputRef.current.value = '';
                       }}
                       className="w-full px-3 py-2 bg-[#191321] border border-[#2D233D] rounded-xl text-xs text-[#F8F5FC] placeholder-[#B9B0C6]/50 focus:outline-none focus:border-[#9B5CFF]"
                     />
@@ -393,7 +429,7 @@ export const CreatePostCard: React.FC<CreatePostCardProps> = ({
               {/* Submit button */}
               <button
                 type="submit"
-                disabled={isSubmitting || (!body.trim() && !mediaUrl)}
+                disabled={isSubmitting || (!body.trim() && !mediaUrl && !mediaFile)}
                 className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-[#9B5CFF] to-[#F05AA6] hover:opacity-95 text-white text-xs font-semibold rounded-xl shadow-lg shadow-[#9B5CFF]/20 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <span>{isSubmitting ? 'Posting...' : 'Share with Circle'}</span>
