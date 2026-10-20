@@ -36,6 +36,15 @@ jobs:
           VITE_FIREBASE_APP_ID: "1:981047281108:web:40106933cfa2bf32f1c241"
           VITE_FIRESTORE_DATABASE_ID: ai-studio-bicirclebisexual-7b1ba258-2320-4251-a404-a27b5a1fc949
 
+      - name: Authenticate for Firebase database rules deployment
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          project_id: ai-studio-applet-webapp-8c041
+
+      - name: Deploy Firestore rules, indexes, and Storage rules
+        run: npx --yes firebase-tools@latest deploy --only firestore,storage --project ai-studio-applet-webapp-8c041 --non-interactive
+
       - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
