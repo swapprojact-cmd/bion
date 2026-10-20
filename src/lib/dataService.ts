@@ -179,6 +179,19 @@ function cacheCollection<T>(items: T[], key: keyof CommunityDataStore): void {
   store.save();
 }
 
+
+function cleanFirestoreData<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(item => cleanFirestoreData(item)) as T;
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (item !== undefined) cleaned[key] = cleanFirestoreData(item);
+    }
+    return cleaned as T;
+  }
+  return value;
+}
+
 function firestoreErrorMessage(error: unknown): string {
   if (error && typeof error === 'object' && 'code' in error) {
     const code = String((error as { code?: unknown }).code || '');
@@ -243,70 +256,30 @@ export const DataService = {
     return list.sort((a, b) => (a.distance_km ?? Number.POSITIVE_INFINITY) - (b.distance_km ?? Number.POSITIVE_INFINITY));
   },
   async addProfilePhoto(userId: string, photo: { url: string; caption?: string; is_18_plus?: boolean }): Promise<Profile> {
-    const p = store.profiles.find(x => x.id === userId);
-    if (!p) throw new Error('Profile not found');
-    const newPhoto = {
-      id: 'photo_' + Date.now(),
-      type: 'photo' as const,
-      url: photo.url,
-      caption: photo.caption || '',
-      is_18_plus: !!photo.is_18_plus,
-      created_at: new Date().toISOString(),
-    };
-    p.photos = [newPhoto, ...(p.photos || [])];
-    p.updated_at = new Date().toISOString();
-    store.save();
-    try {
-      await setDoc(doc(db, 'profiles', userId), p, { merge: true });
-    } catch (e) {
-      console.warn('Firestore sync photo:', e);
-    }
-    return p;
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to edit your own gallery.');
+    const profile = await this.getProfileById(userId);
+    if (!profile) throw new Error('Profile not found in Firestore.');
+    const newPhoto = { id: 'photo_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16), type: 'photo' as const,
+      url: photo.url, caption: photo.caption || '', is_18_plus: !!photo.is_18_plus, created_at: new Date().toISOString() };
+    return this.updateProfile(userId, { photos: [newPhoto, ...(profile.photos || [])] });
   },
-
   async addProfileVideo(userId: string, video: { url: string; title: string; caption?: string; thumbnail_url?: string; is_18_plus?: boolean }): Promise<Profile> {
-    const p = store.profiles.find(x => x.id === userId);
-    if (!p) throw new Error('Profile not found');
-    const newVideo = {
-      id: 'vid_' + Date.now(),
-      type: 'video' as const,
-      url: video.url,
-      title: video.title,
-      caption: video.caption || '',
-      thumbnail_url: video.thumbnail_url || 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&w=600&q=80',
-      duration: '0:15',
-      is_18_plus: !!video.is_18_plus,
-      created_at: new Date().toISOString(),
-    };
-    p.videos = [newVideo, ...(p.videos || [])];
-    p.updated_at = new Date().toISOString();
-    store.save();
-    try {
-      await setDoc(doc(db, 'profiles', userId), p, { merge: true });
-    } catch (e) {
-      console.warn('Firestore sync video:', e);
-    }
-    return p;
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to edit your own gallery.');
+    const profile = await this.getProfileById(userId);
+    if (!profile) throw new Error('Profile not found in Firestore.');
+    const newVideo = { id: 'vid_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16), type: 'video' as const,
+      url: video.url, title: video.title, caption: video.caption || '', thumbnail_url: video.thumbnail_url || '',
+      duration: '0:15', is_18_plus: !!video.is_18_plus, created_at: new Date().toISOString() };
+    return this.updateProfile(userId, { videos: [newVideo, ...(profile.videos || [])] });
   },
-
   async deleteProfileMedia(userId: string, mediaId: string, type: 'photo' | 'video'): Promise<Profile> {
-    const p = store.profiles.find(x => x.id === userId);
-    if (!p) throw new Error('Profile not found');
-    if (type === 'photo') {
-      p.photos = (p.photos || []).filter(item => item.id !== mediaId);
-    } else {
-      p.videos = (p.videos || []).filter(item => item.id !== mediaId);
-    }
-    p.updated_at = new Date().toISOString();
-    store.save();
-    try {
-      await setDoc(doc(db, 'profiles', userId), p, { merge: true });
-    } catch (e) {
-      console.warn('Firestore sync delete media:', e);
-    }
-    return p;
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to edit your own gallery.');
+    const profile = await this.getProfileById(userId);
+    if (!profile) throw new Error('Profile not found in Firestore.');
+    return this.updateProfile(userId, type === 'photo'
+      ? { photos: (profile.photos || []).filter(item => item.id !== mediaId) }
+      : { videos: (profile.videos || []).filter(item => item.id !== mediaId) });
   },
-
   async seedFirestoreWithInitialData(): Promise<{ success: boolean; count: number }> {
     // Never upload demo fixtures into a production database.
     console.warn('Firestore fixture seeding is disabled. Create real data through the app.');
@@ -846,168 +819,140 @@ export const DataService = {
     return conv;
   },
   async getNotifications(userId: string): Promise<Notification[]> {
-    const list = store.notifications
-      .filter(n => n.recipient_id === userId)
-      .map(n => ({
-        ...n,
-        actor: store.profiles.find(p => p.id === n.actor_id),
-      }));
-
-    return list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to view your notifications.');
+    const records = await readCollection<Notification>('notifications', where('recipient_id', '==', userId));
+    records.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    const result = await Promise.all(records.map(async item => ({ ...item, actor: await this.getProfileById(item.actor_id) || undefined })));
+    store.notifications = result;
+    store.save();
+    return result;
   },
-
   createNotification(notif: Omit<Notification, 'id' | 'created_at' | 'read_at'>): void {
-    const newNotif: Notification = {
+    const uid = auth.currentUser?.uid;
+    if (!uid || notif.actor_id !== uid) {
+      console.warn('Skipped notification because actor_id did not match the signed-in Firebase user.');
+      return;
+    }
+    const notification: Notification = {
       ...notif,
-      id: 'notif_' + Date.now() + Math.random().toString(36).substring(2, 6),
+      id: 'notif_' + crypto.randomUUID().replace(/-/g, '').slice(0, 18),
       read_at: null,
       created_at: new Date().toISOString(),
     };
-    store.notifications.unshift(newNotif);
-    store.save();
+    void setDoc(doc(db, 'notifications', notification.id), cleanFirestoreData(notification))
+      .then(() => {
+        store.notifications.unshift(notification);
+        store.save();
+      })
+      .catch(error => console.error('Could not save Firestore notification:', firestoreErrorMessage(error)));
   },
-
   async markNotificationRead(notifId: string): Promise<void> {
-    const notif = store.notifications.find(n => n.id === notifId);
-    if (notif) {
-      notif.read_at = new Date().toISOString();
-      store.save();
-    }
+    if (!auth.currentUser) throw new Error('Sign in to update notifications.');
+    const ref = doc(db, 'notifications', notifId);
+    const snapshot = await getDoc(ref);
+    if (!snapshot.exists() || snapshot.data().recipient_id !== auth.currentUser.uid) throw new Error('Notification not found or not yours.');
+    const readAt = new Date().toISOString();
+    await updateDoc(ref, { read_at: readAt });
+    store.notifications = store.notifications.map(item => item.id === notifId ? { ...item, read_at: readAt } : item);
+    store.save();
   },
-
   async markAllNotificationsRead(userId: string): Promise<void> {
-    store.notifications.forEach(n => {
-      if (n.recipient_id === userId && !n.read_at) {
-        n.read_at = new Date().toISOString();
-      }
-    });
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to update your notifications.');
+    const notifications = await readCollection<Notification>('notifications', where('recipient_id', '==', userId));
+    await Promise.all(notifications.filter(item => !item.read_at).map(item => updateDoc(doc(db, 'notifications', item.id), { read_at: new Date().toISOString() })));
+    const now = new Date().toISOString();
+    store.notifications = notifications.map(item => ({ ...item, read_at: item.read_at || now }));
     store.save();
   },
-
-  // Safety, Blocks & Reports
   async getBlocks(userId: string): Promise<Block[]> {
-    return store.blocks
-      .filter(b => b.blocker_id === userId)
-      .map(b => ({
-        ...b,
-        blocked_profile: store.profiles.find(p => p.id === b.blocked_id),
-      }));
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to view your block list.');
+    const records = await readCollection<Block>('blocks', where('blocker_id', '==', userId));
+    const result = await Promise.all(records.map(async block => ({ ...block, blocked_profile: await this.getProfileById(block.blocked_id) || undefined })));
+    store.blocks = result;
+    store.save();
+    return result;
   },
-
   async blockUser(blockerId: string, blockedId: string): Promise<void> {
-    if (blockerId === blockedId) throw new Error('Cannot block yourself');
-
-    const already = store.blocks.some(b => b.blocker_id === blockerId && b.blocked_id === blockedId);
-    if (!already) {
-      store.blocks.push({
-        blocker_id: blockerId,
-        blocked_id: blockedId,
-        created_at: new Date().toISOString(),
-      });
-      // Also remove friendships
-      this.removeFriendship(blockerId, blockedId);
-      store.save();
-    }
+    if (!auth.currentUser || auth.currentUser.uid !== blockerId) throw new Error('Sign in to block a member.');
+    if (blockerId === blockedId) throw new Error('You cannot block yourself.');
+    const id = blockerId + '_' + blockedId;
+    await setDoc(doc(db, 'blocks', id), { blocker_id: blockerId, blocked_id: blockedId, created_at: new Date().toISOString() }, { merge: true });
+    // Remove any existing friendship using the deterministic Firestore document ID.
+    await this.removeFriendship(blockerId, blockedId).catch(() => undefined);
+    store.blocks = store.blocks.filter(block => !(block.blocker_id === blockerId && block.blocked_id === blockedId)).concat({ blocker_id: blockerId, blocked_id: blockedId, created_at: new Date().toISOString() });
+    store.save();
   },
-
   async unblockUser(blockerId: string, blockedId: string): Promise<void> {
-    store.blocks = store.blocks.filter(b => !(b.blocker_id === blockerId && b.blocked_id === blockedId));
+    if (!auth.currentUser || auth.currentUser.uid !== blockerId) throw new Error('Sign in to unblock a member.');
+    await deleteDoc(doc(db, 'blocks', blockerId + '_' + blockedId));
+    store.blocks = store.blocks.filter(block => !(block.blocker_id === blockerId && block.blocked_id === blockedId));
     store.save();
   },
-
   async createReport(data: {
-    reporter_id: string;
-    target_type: ReportTargetType;
-    target_id: string;
-    reason: ReportReason;
-    details?: string;
+    reporter_id: string; target_type: ReportTargetType; target_id: string;
+    reason: ReportReason; details?: string;
   }): Promise<Report> {
-    const newReport: Report = {
-      id: 'rep_' + Date.now(),
-      reporter_id: data.reporter_id,
-      target_type: data.target_type,
-      target_id: data.target_id,
-      reason: data.reason,
-      details: data.details || null,
-      status: 'pending',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      reporter: store.profiles.find(p => p.id === data.reporter_id),
-      target_summary: `${data.target_type} #${data.target_id}`,
+    if (!auth.currentUser || auth.currentUser.uid !== data.reporter_id) throw new Error('Sign in before reporting content.');
+    const now = new Date().toISOString();
+    const report: Report = {
+      id: 'rep_' + crypto.randomUUID().replace(/-/g, '').slice(0, 18),
+      reporter_id: data.reporter_id, target_type: data.target_type, target_id: data.target_id,
+      reason: data.reason, details: data.details || null, status: 'pending',
+      created_at: now, updated_at: now, target_summary: data.target_type + ' #' + data.target_id,
     };
-
-    store.reports.unshift(newReport);
+    await setDoc(doc(db, 'reports', report.id), cleanFirestoreData(report));
+    store.reports.unshift(report);
     store.save();
-    return newReport;
+    return { ...report, reporter: await this.getProfileById(data.reporter_id) || undefined };
   },
-
   async getReports(): Promise<Report[]> {
-    return store.reports.map(r => ({
-      ...r,
-      reporter: store.profiles.find(p => p.id === r.reporter_id),
-    }));
+    if (!auth.currentUser) throw new Error('Sign in to view reports.');
+    const reports = await readCollection<Report>('reports');
+    const result = await Promise.all(reports.map(async report => ({ ...report, reporter: await this.getProfileById(report.reporter_id) || undefined })));
+    result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    store.reports = result;
+    store.save();
+    return result;
   },
-
   async updateReportStatus(reportId: string, status: Report['status']): Promise<void> {
-    const rep = store.reports.find(r => r.id === reportId);
-    if (rep) {
-      rep.status = status;
-      rep.updated_at = new Date().toISOString();
-      store.save();
-    }
+    if (!auth.currentUser) throw new Error('Sign in before updating a report.');
+    const ref = doc(db, 'reports', reportId);
+    const snapshot = await getDoc(ref);
+    if (!snapshot.exists()) throw new Error('Report not found.');
+    const update = { status, updated_at: new Date().toISOString() };
+    await updateDoc(ref, update);
+    store.reports = store.reports.map(report => report.id === reportId ? { ...report, ...update } : report);
+    store.save();
   },
-
   async getModerationActions(): Promise<ModerationAction[]> {
-    return store.moderationActions.map(ma => ({
-      ...ma,
-      moderator: store.profiles.find(p => p.id === ma.moderator_id),
-    })).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    if (!auth.currentUser) throw new Error('Sign in to view moderation history.');
+    const records = await readCollection<ModerationAction>('moderation_actions');
+    const result = await Promise.all(records.map(async action => ({ ...action, moderator: await this.getProfileById(action.moderator_id) || undefined })));
+    result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    store.moderationActions = result;
+    store.save();
+    return result;
   },
-
   async executeModerationAction(data: {
-    moderator_id: string;
-    target_type: string;
-    target_id: string;
-    action_type: ModerationActionType;
-    reason: string;
-    report_id?: string;
+    moderator_id: string; target_type: string; target_id: string;
+    action_type: ModerationActionType; reason: string; report_id?: string;
   }): Promise<ModerationAction> {
+    if (!auth.currentUser || auth.currentUser.uid !== data.moderator_id) throw new Error('Sign in before performing moderation.');
+    // Privileged effects must run in a trusted Cloud Function; client booleans are not sufficient authority.
+    const token = await auth.currentUser.getIdTokenResult(true);
+    if (token.claims.moderator !== true && token.claims.admin !== true) throw new Error('This account does not have a trusted Firebase moderator/admin claim.');
     const action: ModerationAction = {
-      id: 'mact_' + Date.now(),
-      moderator_id: data.moderator_id,
-      target_type: data.target_type,
-      target_id: data.target_id,
-      action_type: data.action_type,
-      reason: data.reason,
-      created_at: new Date().toISOString(),
-      moderator: store.profiles.find(p => p.id === data.moderator_id),
-    };
-
+      id: 'mact_' + crypto.randomUUID().replace(/-/g, '').slice(0, 18),
+      moderator_id: data.moderator_id, target_type: data.target_type, target_id: data.target_id,
+      action_type: data.action_type, reason: data.reason, created_at: new Date().toISOString(),
+      report_id: data.report_id,
+    } as ModerationAction;
+    await setDoc(doc(db, 'moderation_actions', action.id), cleanFirestoreData(action));
+    if (data.report_id) await this.updateReportStatus(data.report_id, 'resolved');
     store.moderationActions.unshift(action);
-
-    // Apply consequence
-    if (data.action_type === 'remove_content') {
-      if (data.target_type === 'post') {
-        const post = store.posts.find(p => p.id === data.target_id);
-        if (post) post.status = 'removed_by_mod';
-      } else if (data.target_type === 'comment') {
-        const comm = store.comments.find(c => c.id === data.target_id);
-        if (comm) comm.status = 'removed_by_mod';
-      }
-    } else if (data.action_type === 'suspend_user') {
-      const user = store.profiles.find(p => p.id === data.target_id);
-      if (user) user.status = 'suspended';
-    }
-
-    if (data.report_id) {
-      await this.updateReportStatus(data.report_id, 'resolved');
-    }
-
     store.save();
     return action;
   },
-
-  // Account Data Export & Deletion
   async exportUserData(userId: string): Promise<string> {
     const profile = await this.getProfileById(userId);
     const priv = await this.getUserPrivate(userId);
@@ -1030,10 +975,10 @@ export const DataService = {
   },
 
   async deactivateUser(userId: string): Promise<void> {
-    const profile = store.profiles.find(p => p.id === userId);
-    if (profile) {
-      profile.status = 'deactivated';
-      store.save();
-    }
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('You can deactivate only your own account.');
+    const snapshot = await getDoc(doc(db, 'profiles', userId));
+    if (!snapshot.exists()) throw new Error('Profile not found.');
+    // Account deactivation status changes should be made by a trusted backend, not a client-writable role field.
+    throw new Error('Account deactivation requires the trusted account-management Cloud Function.');
   },
 };
