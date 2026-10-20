@@ -352,18 +352,22 @@ export const DataService = {
   async getGroups(currentUserId?: string): Promise<Group[]> {
     const publicGroups = await readCollection<Group>('groups', where('visibility', '==', 'public'));
     let ownMemberships: GroupMember[] = [];
+    let discoverablePrivateGroups: Group[] = [];
     let joinedGroups: Group[] = [];
     if (currentUserId && auth.currentUser?.uid === currentUserId) {
+      // Private groups are discoverable to signed-in members so they can read the
+      // group's rules and request approval; membership stays private and separately controlled.
+      discoverablePrivateGroups = await readCollection<Group>('groups', where('visibility', '==', 'private'));
       ownMemberships = await readCollection<GroupMember>('group_members', where('user_id', '==', currentUserId));
       const privateIds = new Set(ownMemberships.map(m => m.group_id));
       for (const groupId of privateIds) {
-        if (publicGroups.some(group => group.id === groupId)) continue;
+        if (publicGroups.some(group => group.id === groupId) || discoverablePrivateGroups.some(group => group.id === groupId)) continue;
         const snapshot = await getDoc(doc(db, 'groups', groupId));
         if (snapshot.exists()) joinedGroups.push({ ...snapshot.data(), id: snapshot.id } as Group);
       }
     }
     store.groupMembers = ownMemberships;
-    const combined = [...new Map([...publicGroups, ...joinedGroups].map(group => [group.id, group])).values()]
+    const combined = [...new Map([...publicGroups, ...discoverablePrivateGroups, ...joinedGroups].map(group => [group.id, group])).values()]
       .filter(group => group.status === 'active')
       .map(group => {
         const own = ownMemberships.find(m => m.group_id === group.id);
