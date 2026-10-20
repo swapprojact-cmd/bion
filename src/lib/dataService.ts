@@ -299,6 +299,14 @@ export const DataService = {
     cacheCollection(live, 'profiles');
     return live;
   },
+  /** Admin-only directory read. Do not put this full directory into localStorage cache. */
+  async getAdminProfiles(): Promise<Profile[]> {
+    const user = auth.currentUser;
+    if (!user) throw new Error('Sign in to view the member directory.');
+    const token = await user.getIdTokenResult();
+    if (token.claims.admin !== true) throw new Error('A trusted Firebase admin claim is required to view the full member directory.');
+    return readCollection<Profile>('profiles');
+  },
   async getProfileById(id: string): Promise<Profile | null> {
     try {
       const snapshot = await getDoc(doc(db, 'profiles', id));

@@ -42,8 +42,11 @@ jobs:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           project_id: ai-studio-applet-webapp-8c041
 
-      - name: Deploy Firestore rules, indexes, and Storage rules
-        run: npx --yes firebase-tools@latest deploy --only firestore,storage --project ai-studio-applet-webapp-8c041 --non-interactive
+      - name: Install Cloud Functions dependencies
+        run: npm --prefix functions install
+
+      - name: Deploy Firestore rules, indexes, Storage rules, and Cloud Functions
+        run: npx --yes firebase-tools@latest deploy --only firestore,storage,functions --project ai-studio-applet-webapp-8c041 --non-interactive
 
       - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0

@@ -31,9 +31,9 @@ Copy .env.example to .env.local and fill these values from your own Firebase Web
     VITE_FIREBASE_STORAGE_BUCKET=your-storage-bucket
     VITE_FIREBASE_MESSAGING_SENDER_ID=your-sender-id
     VITE_FIREBASE_APP_ID=your-web-app-id
-    VITE_FIRESTORE_DATABASE_ID=(default)
+    VITE_FIRESTORE_DATABASE_ID=ai-studio-bicirclebisexual-7b1ba258-2320-4251-a404-a27b5a1fc949
 
-The app intentionally fails fast when any required Firebase value is missing; it does not silently connect to the previous AI Studio project. Never put Admin SDK credentials in VITE_* variables.
+This repository is currently configured for that named Firestore database in `firebase.json`. The web app, Cloud Functions, and the admin bootstrap script must all target the same database ID; a default-database Admin SDK call will not read or update records in this named database. If you use a different database ID, update `.env.local`, `firebase.json`, and the fallback database ID in `functions/index.js` and `functions/scripts/bootstrap-admin.js` together. Never put Admin SDK credentials in VITE_* variables.
 
 ## 3. Select the Firebase CLI project
 
@@ -77,10 +77,17 @@ The starter rules use these collections: profiles, user_private, groups, group_m
 
 - Role grants use Firebase Auth custom claims, not writable profile booleans. Bootstrap the first admin with the trusted one-off Admin SDK script above; never expose an endpoint that lets a user grant themselves a role.\n- `deleteOwnAccount` is a callable function that deletes the caller's Auth account and selected top-level documents. Audit it against every collection you add and confirm deletion behavior in a disposable test project before launch.
 - Private report reads and moderation audit reads require admin/moderator claims.
-- Storage upload helpers accept images only; security rules enforce ownership and size limits as a second layer.
+- Storage upload helpers support JPG, PNG, WebP images and MP4, WebM, MOV videos with ownership, MIME-type, and size checks enforced in Storage Rules.
 - Firestore rules are not filters. Queries must be constrained so every possible returned document satisfies the corresponding read rule.
 - Cloud Functions use the Admin SDK, which bypasses Firestore rules. Validate authorization and input in every function.
 
+## Database troubleshooting notes
+
+- Use the **Database Setup → Test connection** control in the admin page. It tests a read against the configured database's `health_checks/client` document; it does not prove all collections have correct read/write rules.
+- The browser localStorage is a convenience cache, not a recovery source or authoritative database. Do not upload cached records as a bulk repair; they may be stale or contain demo fixtures.
+- This project is configured for a fresh Firebase setup: no Supabase records or user accounts were imported. A fresh database will look empty until real users sign up and create posts/groups.
+- The Hosting workflow must deploy Firestore rules, Storage rules, and Cloud Functions for the deployed UI, permissions, and backend functions to stay in sync.
+
 ## Important integration note
 
-This commit establishes Firebase infrastructure and safe service helpers. The existing UI/data layer still contains demo/localStorage behavior and may expect legacy document shapes. Do not treat this infrastructure commit alone as proof that every screen is fully cloud-backed. Before launch, finish converting all DataService mutations and reads to Firestore, use onSnapshot for live feed/messages/notifications, replace any Supabase settings UI, and remove demo-account login paths. Test end-to-end flows with the Firebase Emulator Suite and a fresh test project before production deployment.
+The existing UI/data layer still contains localStorage cache behavior and may expect legacy document shapes. Do not treat configuration changes alone as proof that every screen is fully cloud-backed. Before launch, finish converting all DataService mutations and reads to Firestore, use onSnapshot for live feed/messages/notifications, replace any Supabase settings UI, and remove demo-account login paths. Test end-to-end flows with the Firebase Emulator Suite and a fresh test project before production deployment.

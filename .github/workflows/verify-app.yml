@@ -25,6 +25,8 @@ jobs:
         run: npm run lint
       - name: Build production frontend
         run: npm run build
+      - name: Validate Cloud Functions JavaScript
+        run: npm --prefix functions run lint
       - name: Set up Java for Firebase emulators
         uses: actions/setup-java@v4
         with:

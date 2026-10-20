@@ -65,7 +65,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           console.error('Authenticated Firebase user has no matching Firestore profile.');
           return;
         }
-        setCurrentUser(prof);
+        // Display roles from trusted Firebase Auth custom claims, not mutable profile booleans.
+        const token = await firebaseUser.getIdTokenResult();
+        const trustedProfile: Profile = {
+          ...prof,
+          is_admin: token.claims.admin === true,
+          is_moderator: token.claims.moderator === true || token.claims.admin === true,
+        };
+        setCurrentUser(trustedProfile);
         const priv = await DataService.getUserPrivate(firebaseUser.uid);
         setUserPrivate(priv);
         if (typeof window !== 'undefined') localStorage.setItem('bicircle_current_user_id', firebaseUser.uid);
@@ -95,7 +102,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await signOut(auth);
         return { success: false, error: 'Your account has no BiCircle profile yet. Please contact support.' };
       }
-      setCurrentUser(prof);
+      // Force-refresh role claims after successful sign-in so UI permissions match Firestore rules.
+      const token = await credential.user.getIdTokenResult(true);
+      const trustedProfile: Profile = {
+        ...prof,
+        is_admin: token.claims.admin === true,
+        is_moderator: token.claims.moderator === true || token.claims.admin === true,
+      };
+      setCurrentUser(trustedProfile);
       const priv = await DataService.getUserPrivate(prof.id);
       setUserPrivate(priv);
       if (typeof window !== 'undefined') localStorage.setItem('bicircle_current_user_id', prof.id);
@@ -196,7 +210,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateCurrentProfile = async (updates: Partial<Profile>) => {
     if (!currentUser) return;
     const updated = await DataService.updateProfile(currentUser.id, updates);
-    setCurrentUser(updated);
+    setCurrentUser({
+      ...updated,
+      is_admin: currentUser.is_admin,
+      is_moderator: currentUser.is_moderator,
+    });
   };
 
   const updateCurrentPrivate = async (updates: Partial<UserPrivate>) => {

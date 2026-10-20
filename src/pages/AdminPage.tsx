@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
-import { SlidersHorizontal, Users, MessageSquare, Database, Shield, AlertTriangle, RotateCcw, CheckCircle, Copy, Flame } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { SlidersHorizontal, Database, AlertTriangle, RotateCcw, CheckCircle, Flame, RefreshCw } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useCommunity } from '../context/CommunityContext';
-import { store, DataService } from '../lib/dataService';
+import { DataService } from '../lib/dataService';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { app } from '../lib/firebase';
+import { Profile } from '../types';
 import { Avatar } from '../components/common/Avatar';
 import { FirebaseStatusModal } from '../components/modals/FirebaseStatusModal';
 
@@ -11,13 +14,39 @@ interface AdminPageProps {
 }
 
 export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
-  const { isAdmin, currentUser, resetAllDemoData, firebaseConnected } = useAuth();
+  const { isAdmin, resetAllDemoData, firebaseConnected, firebaseConnectionChecked } = useAuth();
   const { posts, groups, reports, refreshAll } = useCommunity();
 
   const [searchMember, setSearchMember] = useState('');
   const [showConfigModal, setShowConfigModal] = useState(false);
-  const [copiedSql, setCopiedSql] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [members, setMembers] = useState<Profile[]>([]);
+  const [membersLoading, setMembersLoading] = useState(true);
+  const [membersError, setMembersError] = useState<string | null>(null);
+  const [roleUpdateUserId, setRoleUpdateUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isAdmin) {
+      setMembers([]);
+      setMembersLoading(false);
+      return;
+    }
+
+    setMembersLoading(true);
+    setMembersError(null);
+    DataService.getAdminProfiles()
+      .then((items) => { if (!cancelled) setMembers(items); })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setMembersError(error instanceof Error ? error.message : 'Could not load members from Firestore.');
+          setMembers([]);
+        }
+      })
+      .finally(() => { if (!cancelled) setMembersLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [isAdmin]);
 
   if (!isAdmin) {
     return (
@@ -36,10 +65,25 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
   }
 
   const handleToggleMod = async (userId: string, currentMod: boolean) => {
-    await DataService.updateProfile(userId, { is_moderator: !currentMod });
-    setFeedbackMsg(`Updated moderator permissions for user.`);
-    setTimeout(() => setFeedbackMsg(null), 2000);
-    await refreshAll();
+    setRoleUpdateUserId(userId);
+    setMembersError(null);
+    setFeedbackMsg(null);
+    try {
+      // Role grants must use trusted Firebase Auth custom claims, not a client-side profile edit.
+      const setCommunityRole = httpsCallable<
+        { uid: string; role: 'moderator'; enabled: boolean },
+        { success: boolean }
+      >(getFunctions(app), 'setCommunityRole');
+      await setCommunityRole({ uid: userId, role: 'moderator', enabled: !currentMod });
+      const updatedMembers = await DataService.getAdminProfiles();
+      setMembers(updatedMembers);
+      setFeedbackMsg(`Moderator role ${currentMod ? 'revoked' : 'granted'}. The member must refresh their sign-in token before new permissions take effect.`);
+      await refreshAll();
+    } catch (error: unknown) {
+      setMembersError(error instanceof Error ? error.message : 'Could not update this moderator role. Check the trusted admin claim and Cloud Function deployment.');
+    } finally {
+      setRoleUpdateUserId(null);
+    }
   };
 
   const handleResetData = () => {
@@ -49,7 +93,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
     }
   };
 
-  const membersList = store.profiles.filter(p =>
+  const membersList = members.filter(p =>
     p.display_name.toLowerCase().includes(searchMember.toLowerCase()) ||
     p.username.toLowerCase().includes(searchMember.toLowerCase())
   );
@@ -98,7 +142,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="p-4 rounded-2xl bg-[#191321] border border-[#2D233D]">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-[#B9B0C6]">Total Members</span>
-          <div className="text-2xl font-bold text-white mt-1 font-display">{store.profiles.length}</div>
+          <div className="text-2xl font-bold text-white mt-1 font-display">{membersLoading ? '…' : members.length}</div>
         </div>
 
         <div className="p-4 rounded-2xl bg-[#191321] border border-[#2D233D]">
@@ -128,8 +172,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
           <div>
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <span>Firebase Cloud Firestore Database</span>
-              <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
-                Live & Active
+              <span className={`text-[10px] px-2 py-0.5 rounded border font-mono ${firebaseConnectionChecked && firebaseConnected ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' : firebaseConnectionChecked ? 'bg-rose-500/10 text-rose-300 border-rose-500/20' : 'bg-amber-500/10 text-amber-200 border-amber-500/20'}`}>
+                {firebaseConnectionChecked ? (firebaseConnected ? 'Reachable' : 'Not confirmed') : 'Checking…'}
               </span>
             </h3>
             <p className="text-xs text-[#B9B0C6] font-mono mt-0.5">
@@ -150,7 +194,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#2D233D]">
           <div>
             <h3 className="text-base font-bold text-white">Member Directory & Permissions</h3>
-            <p className="text-xs text-[#B9B0C6]">Grant or revoke moderator privileges</p>
+            <p className="text-xs text-[#B9B0C6]">Member records load from Firestore; role changes use a trusted Cloud Function.</p>
           </div>
           <input
             type="text"
@@ -161,6 +205,18 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
           />
         </div>
 
+        {membersError && (
+          <div role="alert" className="rounded-xl border border-rose-500/25 bg-rose-500/10 p-3 text-xs leading-relaxed text-rose-200">
+            {membersError}
+          </div>
+        )}
+        {membersLoading ? (
+          <div className="flex items-center gap-2 py-5 text-sm text-[#B9B0C6]"><RefreshCw className="h-4 w-4 animate-spin" /> Loading members from Firestore…</div>
+        ) : !membersError && membersList.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-[#423354] p-5 text-sm text-[#B9B0C6]">
+            {members.length === 0 ? 'No profiles were returned by Firestore for this admin account.' : 'No members match this search.'}
+          </div>
+        ) : (
         <div className="space-y-2.5">
           {membersList.map(member => (
             <div
@@ -186,14 +242,15 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
               <div className="flex items-center gap-2">
                 {!member.is_admin && (
                   <button
-                    onClick={() => handleToggleMod(member.id, member.is_moderator)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                    onClick={() => void handleToggleMod(member.id, member.is_moderator)}
+                    disabled={roleUpdateUserId === member.id}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer disabled:cursor-wait disabled:opacity-50 ${
                       member.is_moderator
                         ? 'bg-rose-500/10 text-rose-300 border border-rose-500/20 hover:bg-rose-500/20'
                         : 'bg-[#9B5CFF]/15 text-[#9B5CFF] border border-[#9B5CFF]/30 hover:bg-[#9B5CFF]/25'
                     }`}
                   >
-                    {member.is_moderator ? 'Revoke Mod' : 'Make Moderator'}
+                    {roleUpdateUserId === member.id ? 'Saving…' : member.is_moderator ? 'Revoke Mod' : 'Make Moderator'}
                   </button>
                 )}
                 <button
@@ -206,6 +263,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ navigate }) => {
             </div>
           ))}
         </div>
+        )}
       </div>
 
       <FirebaseStatusModal isOpen={showConfigModal} onClose={() => setShowConfigModal(false)} />

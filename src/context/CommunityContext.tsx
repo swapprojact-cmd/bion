@@ -109,11 +109,49 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [dataSyncWarnings, setDataSyncWarnings] = useState<string[]>([]);
 
   const refreshAll = useCallback(async () => {
+    setIsLoadingFeed(true);
+
+    // On sign-out keep only public community posts/groups and clear private state from the previous session.
     if (!currentUser) {
-      setDataSyncWarnings([]);
+      try {
+        const [publicPosts, publicGroups] = await Promise.all([
+          DataService.getPosts({ sort: sortFeed }).then(
+            value => ({ ok: true as const, value }),
+            error => ({ ok: false as const, error })
+          ),
+          DataService.getGroups().then(
+            value => ({ ok: true as const, value }),
+            error => ({ ok: false as const, error })
+          ),
+        ]);
+        const warnings: string[] = [];
+        if (publicPosts.ok) setPosts(publicPosts.value);
+        else {
+          setPosts([]);
+          warnings.push('public community posts');
+          console.error('Firestore sync failed for public community posts:', publicPosts.error);
+        }
+        if (publicGroups.ok) setGroups(publicGroups.value);
+        else {
+          setGroups([]);
+          warnings.push('public groups and circles');
+          console.error('Firestore sync failed for public groups and circles:', publicGroups.error);
+        }
+        setFriends([]);
+        setIncomingRequests([]);
+        setOutgoingRequests([]);
+        setConversations([]);
+        setNotifications([]);
+        setBlockedUsers([]);
+        setReports([]);
+        setModerationActions([]);
+        setDataSyncWarnings(warnings);
+      } finally {
+        setIsLoadingFeed(false);
+      }
       return;
     }
-    setIsLoadingFeed(true);
+
     try {
       const settled = await Promise.all([
         DataService.getPosts({ currentUserId: currentUser.id, sort: sortFeed }).then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error })),
@@ -156,9 +194,7 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [currentUser, sortFeed]);
 
   useEffect(() => {
-    if (currentUser) {
-      refreshAll();
-    }
+    void refreshAll();
   }, [currentUser, refreshAll]);
 
   // Feed Actions

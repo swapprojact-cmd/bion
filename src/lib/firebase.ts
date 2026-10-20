@@ -32,17 +32,43 @@ export const databaseId = env.VITE_FIRESTORE_DATABASE_ID || '(default)';
 export const db = databaseId === '(default)' ? getFirestore(app) : getFirestore(app, databaseId);
 export const storage = getStorage(app);
 
-export async function validateFirestoreConnection(): Promise<boolean> {
+export type FirestoreConnectionCheck =
+  | { ok: true }
+  | { ok: false; code: string; message: string };
+
+function firestoreConnectionError(error: unknown): { code: string; message: string } {
+  const rawCode = error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code || '')
+    : '';
+  const code = rawCode.split('/').pop() || 'unknown';
+  const message = code === 'permission-denied'
+    ? 'Firestore denied the health-check read. Confirm the rules deployed to the configured named database.'
+    : code === 'unavailable' || code === 'network-request-failed'
+      ? 'Firestore could not be reached. Check the network, Firebase project, and database availability.'
+      : code === 'not-found'
+        ? 'The configured Firestore database was not found in this Firebase project.'
+        : code === 'failed-precondition'
+          ? 'Firestore rejected the request because the database or client configuration is not ready.'
+          : error instanceof Error
+            ? error.message
+            : 'Unknown Firestore connection error.';
+  return { code, message };
+}
+
+/** Performs a server read against the configured database; this checks connectivity, not all collection permissions. */
+export async function checkFirestoreConnection(): Promise<FirestoreConnectionCheck> {
   try {
     const { doc, getDocFromServer } = await import('firebase/firestore');
-    // firestore.rules explicitly permits reads to health_checks, so a denied read is not misreported as success.
     await getDocFromServer(doc(db, 'health_checks', 'client'));
-    return true;
+    return { ok: true };
   } catch (error) {
-    const code = error && typeof error === 'object' && 'code' in error
-      ? String((error as { code?: unknown }).code || '')
-      : '';
-    console.error('Firestore connection check failed:', code || error);
-    return false;
+    const detail = firestoreConnectionError(error);
+    console.error('Firestore connection check failed:', detail.code, error);
+    return { ok: false, ...detail };
   }
+}
+
+export async function validateFirestoreConnection(): Promise<boolean> {
+  const result = await checkFirestoreConnection();
+  return result.ok;
 }
