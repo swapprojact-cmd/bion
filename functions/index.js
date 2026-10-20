@@ -1,13 +1,18 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
-const { initializeApp, getApp } = require("firebase-admin/app");
+const { initializeApp } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
-const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { Firestore, FieldValue } = require("@google-cloud/firestore");
 
 initializeApp();
 
-// Keep trusted server operations on the same named Firestore database used by the web app.
-const FIRESTORE_DATABASE_ID = process.env.FIRESTORE_DATABASE_ID || "ai-studio-bicirclebisexual-7b1ba258-2320-4251-a404-a27b5a1fc949";
-const db = getFirestore(getApp(), FIRESTORE_DATABASE_ID);
+// Use the stable Google Cloud Firestore server client for named-database access.
+// Cloud Functions provides Application Default Credentials and GCLOUD_PROJECT.
+const PROJECT_ID = process.env.GCLOUD_PROJECT
+  || process.env.GOOGLE_CLOUD_PROJECT
+  || "ai-studio-applet-webapp-8c041";
+const FIRESTORE_DATABASE_ID = process.env.FIRESTORE_DATABASE_ID
+  || "ai-studio-bicirclebisexual-7b1ba258-2320-4251-a404-a27b5a1fc949";
+const db = new Firestore({ projectId: PROJECT_ID, databaseId: FIRESTORE_DATABASE_ID });
 
 exports.setCommunityRole = onCall(async (request) => {
   if (!request.auth || request.auth.token.admin !== true) {
