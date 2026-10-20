@@ -88,7 +88,8 @@ service cloud.firestore {
     }
 
     match /groups/{groupId} {
-      allow read: if resource.data.visibility == 'public' || memberOfGroup(groupId) || moderator();
+      // Authenticated members may read private-group metadata so they can request membership.
+      allow read: if resource.data.visibility == 'public' || signedIn() || moderator();
       allow create: if signedIn() && request.resource.data.owner_id == request.auth.uid;
       allow update: if (signedIn()
           && resource.data.owner_id == request.auth.uid
@@ -140,9 +141,9 @@ service cloud.firestore {
 
     match /posts/{postId} {
       allow read: if (signedIn() && resource.data.author_id == request.auth.uid)
-        || resource.data.visibility == 'public'
-        || (signedIn() && resource.data.visibility == 'group_only' && memberOfGroup(resource.data.group_id))
-        || (signedIn() && resource.data.visibility == 'friends_only' && (
+        || (resource.data.visibility == 'public' && resource.data.status == 'published')
+        || (signedIn() && resource.data.visibility == 'group_only' && resource.data.status == 'published' && memberOfGroup(resource.data.group_id))
+        || (signedIn() && resource.data.visibility == 'friends_only' && resource.data.status == 'published' && (
           resource.data.author_id == request.auth.uid
           || exists(/databases/$(database)/documents/friendships/$(resource.data.author_id + '_' + request.auth.uid))
           || exists(/databases/$(database)/documents/friendships/$(request.auth.uid + '_' + resource.data.author_id))
@@ -154,7 +155,9 @@ service cloud.firestore {
         && request.resource.data.status == 'published'
         && request.resource.data.body is string
         && request.resource.data.body.size() <= 10000
-        && request.resource.data.visibility in ['public', 'group_only', 'friends_only', 'private'];
+        && request.resource.data.visibility in ['public', 'group_only', 'friends_only', 'private']
+        && (request.resource.data.visibility != 'group_only'
+          || (request.resource.data.group_id is string && memberOfGroup(request.resource.data.group_id)));
 
       allow update: if (owns('author_id')
           && request.resource.data.author_id == resource.data.author_id
@@ -174,7 +177,7 @@ service cloud.firestore {
     }
 
     match /comments/{commentId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && canReadPost(resource.data.post_id);
       allow create: if createsAs('author_id')
         && request.resource.data.post_id is string
         && request.resource.data.status == 'published'
