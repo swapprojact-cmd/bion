@@ -25,3 +25,5 @@ jobs:
         run: npm run lint
       - name: Build production frontend
         run: npm run build
+      - name: Validate Firestore and Storage rules with emulators
+        run: npx --yes firebase-tools@latest emulators:exec --only firestore,storage --project demo-bicircle "echo Firebase rule emulators started successfully"
