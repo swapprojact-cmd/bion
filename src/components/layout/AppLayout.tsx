@@ -16,7 +16,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   navigate,
   children,
 }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, firebaseConnected, firebaseConnectionChecked } = useAuth();
 
   // Keep public and authentication pages focused; authenticated pages get the desktop sidebar.
   const isAuthOrLanding = currentRoute === '/' || currentRoute === '/login' || currentRoute === '/signup' || currentRoute === '/forgot-password' || currentRoute === '/reset-password';
@@ -31,6 +31,12 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           <Sidebar currentRoute={currentRoute} navigate={navigate} />
         )}
         <main className={'flex-1 min-w-0 pb-24 lg:pb-8 ' + (showSidebar ? 'lg:pl-6' : '')}>
+          {firebaseConnectionChecked && !firebaseConnected && (
+            <div role="status" className="mt-3 rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+              <strong className="font-semibold">Database connection not confirmed.</strong>{' '}
+              Some posts, messages, or profile changes may not save. Refresh the page after checking the Firebase project and Firestore rules.
+            </div>
+          )}
           {children}
         </main>
       </div>
