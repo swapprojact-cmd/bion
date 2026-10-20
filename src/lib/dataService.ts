@@ -33,8 +33,8 @@ import {
   INITIAL_REPORTS,
   INITIAL_MODERATION_ACTIONS,
 } from './initialData';
-import { db } from './firebase';
-import { doc, setDoc, updateDoc, deleteDoc, getDoc, getDocs, collection } from 'firebase/firestore';
+import { auth, db } from './firebase';
+import { doc, setDoc, updateDoc, deleteDoc, getDoc, getDocs, collection, query, where, type QueryConstraint } from 'firebase/firestore';
 
 // Local storage keys
 const STORAGE_PREFIX = 'bicircle_store_';
@@ -162,6 +162,33 @@ class CommunityDataStore {
 }
 
 export const store = new CommunityDataStore();
+
+/** Firestore is the durable source of truth. localStorage is only a same-browser cache. */
+function fromFirestore<T>(snapshot: { id: string; data: () => Record<string, any> }): T {
+  return { ...snapshot.data(), id: snapshot.id } as T;
+}
+
+async function readCollection<T>(name: string, ...constraints: QueryConstraint[]): Promise<T[]> {
+  const source = collection(db, name);
+  const result = await getDocs(constraints.length ? query(source, ...constraints) : source);
+  return result.docs.map(snapshot => fromFirestore<T>(snapshot));
+}
+
+function cacheCollection<T>(items: T[], key: keyof CommunityDataStore): void {
+  (store as any)[key] = items;
+  store.save();
+}
+
+function firestoreErrorMessage(error: unknown): string {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = String((error as { code?: unknown }).code || '');
+    if (code.includes('permission-denied')) return 'Firebase denied this database operation. Check the deployed Firestore rules.';
+    if (code.includes('unavailable') || code.includes('network')) return 'Firebase is unreachable. Check the network and Firebase project configuration.';
+    if (code.includes('not-found')) return 'The configured Firestore database was not found.';
+  }
+  return error instanceof Error ? error.message : 'Unknown Firestore error';
+}
+
 
 // ==========================================
 // DATA SERVICE API
