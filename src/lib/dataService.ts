@@ -313,7 +313,7 @@ export const DataService = {
     if (!current) throw new Error('Profile not found in Firestore.');
     const updated: Profile = { ...current, ...updates, id, updated_at: new Date().toISOString() };
     const { distance_km: _distance, ...payload } = updated;
-    await setDoc(doc(db, 'profiles', id), payload, { merge: true });
+    await setDoc(doc(db, 'profiles', id), cleanFirestoreData(payload), { merge: true });
     const index = store.profiles.findIndex(p => p.id === id);
     if (index >= 0) store.profiles[index] = updated; else store.profiles.push(updated);
     store.save();
@@ -389,10 +389,8 @@ export const DataService = {
   async getGroupMembers(groupId: string): Promise<GroupMember[]> {
     const uid = auth.currentUser?.uid;
     if (!uid) throw new Error('Sign in to view group membership.');
-    const ownSnapshot = await getDoc(doc(db, 'group_members', groupId + '_' + uid));
-    if (!ownSnapshot.exists()) return [];
-    const group = await this.getGroupById(groupId, uid);
-    if (!group) return [];
+    const ownMemberships = await readCollection<GroupMember>('group_members', where('user_id', '==', uid));
+    if (!ownMemberships.some(member => member.group_id === groupId)) return [];
     const members = await readCollection<GroupMember>('group_members', where('group_id', '==', groupId));
     const visible = await Promise.all(members.filter(m => m.membership_status === 'active').map(async member => ({
       ...member, profile: await this.getProfileById(member.user_id) || undefined,
@@ -425,21 +423,19 @@ export const DataService = {
     if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in before joining a group.');
     const group = await this.getGroupById(groupId, userId);
     if (!group) throw new Error('Group not found or you do not have access.');
-    const ref = doc(db, 'group_members', groupId + '_' + userId);
-    const existing = await getDoc(ref);
+    await readCollection<GroupMember>('group_members', where('user_id', '==', userId));
+    const existing = store.groupMembers.find(member => member.group_id === groupId && member.user_id === userId);
     const now = new Date().toISOString();
     const membership: GroupMember = {
-      group_id: groupId, user_id: userId, role: 'member',
-      membership_status: group.visibility === 'private' ? 'pending' : 'active',
-      created_at: existing.exists() ? String(existing.data().created_at || now) : now, updated_at: now,
+      group_id: groupId, user_id: userId, role: existing?.role === 'owner' ? 'owner' : 'member',
+      membership_status: group.visibility === 'private' && existing?.role !== 'owner' ? 'pending' : 'active',
+      created_at: existing?.created_at || now, updated_at: now,
     };
-    if (existing.exists()) await setDoc(ref, membership, { merge: true });
-    else await setDoc(ref, membership);
+    const ref = doc(db, 'group_members', groupId + '_' + userId);
+    if (existing) await setDoc(ref, membership, { merge: true }); else await setDoc(ref, membership);
     store.groupMembers = store.groupMembers.filter(m => !(m.group_id === groupId && m.user_id === userId)).concat(membership);
     store.save();
-    if (membership.membership_status === 'pending') {
-      void this.createNotification({ recipient_id: group.owner_id, actor_id: userId, type: 'group_invite', reference_type: 'group', reference_id: groupId, message: 'requested to join ' + group.name });
-    }
+    if (membership.membership_status === 'pending') void this.createNotification({ recipient_id: group.owner_id, actor_id: userId, type: 'group_invite', reference_type: 'group', reference_id: groupId, message: 'requested to join ' + group.name });
     return membership;
   },
   async leaveGroup(groupId: string, userId: string): Promise<void> {
@@ -466,47 +462,49 @@ export const DataService = {
     if (status === 'active') void this.createNotification({ recipient_id: userId, actor_id: uid, type: 'group_approved', reference_type: 'group', reference_id: groupId, message: 'Your request to join ' + group.name + ' was approved.' });
   },
   async getPosts(options?: {
-    currentUserId?: string;
-    groupId?: string;
-    sort?: 'latest' | 'popular';
-    authorId?: string;
+    currentUserId?: string; groupId?: string; sort?: 'latest' | 'popular'; authorId?: string;
   }): Promise<Post[]> {
     const uid = auth.currentUser?.uid || null;
-    const requestedUid = options?.currentUserId;
-    if (requestedUid && requestedUid !== uid) throw new Error('The requested feed user does not match the signed-in account.');
-    const constraints = [where('status', '==', 'published')];
+    if (options?.currentUserId && options.currentUserId !== uid) throw new Error('The requested feed user does not match the signed-in account.');
+    const shared = [where('status', '==', 'published')];
     const loads: Promise<Post[]>[] = [];
     if (options?.groupId) {
-      const membership = uid ? await getDoc(doc(db, 'group_members', options.groupId + '_' + uid)) : null;
-      if (!uid || !membership?.exists()) return [];
-      loads.push(readCollection<Post>('posts', ...constraints, where('group_id', '==', options.groupId)));
+      if (!uid) return [];
+      const joined = await this.getGroups(uid);
+      if (!joined.some(group => group.id === options.groupId && group.is_member)) return [];
+      loads.push(readCollection<Post>('posts', ...shared, where('group_id', '==', options.groupId), where('visibility', '==', 'group_only')));
     } else if (options?.authorId) {
-      if (!uid || (options.authorId !== uid && !uid)) return [];
-      loads.push(readCollection<Post>('posts', ...constraints, where('author_id', '==', options.authorId)));
+      if (!uid) loads.push(readCollection<Post>('posts', ...shared, where('author_id', '==', options.authorId), where('visibility', '==', 'public')));
+      else if (options.authorId === uid) loads.push(readCollection<Post>('posts', ...shared, where('author_id', '==', uid)));
+      else {
+        loads.push(readCollection<Post>('posts', ...shared, where('author_id', '==', options.authorId), where('visibility', '==', 'public')));
+        if ((await this.getFriendships(uid)).some(friend => friend.id === options.authorId)) {
+          loads.push(readCollection<Post>('posts', ...shared, where('author_id', '==', options.authorId), where('visibility', '==', 'friends_only')));
+        }
+      }
     } else {
-      loads.push(readCollection<Post>('posts', ...constraints, where('visibility', '==', 'public')));
+      loads.push(readCollection<Post>('posts', ...shared, where('visibility', '==', 'public')));
       if (uid) {
-        loads.push(readCollection<Post>('posts', ...constraints, where('author_id', '==', uid)));
+        loads.push(readCollection<Post>('posts', ...shared, where('author_id', '==', uid)));
         const friends = await this.getFriendships(uid);
         for (const friend of friends) {
-          loads.push(readCollection<Post>('posts', ...constraints, where('author_id', '==', friend.id), where('visibility', '==', 'friends_only')));
+          loads.push(readCollection<Post>('posts', ...shared, where('author_id', '==', friend.id), where('visibility', '==', 'friends_only')));
         }
         const memberships = await readCollection<GroupMember>('group_members', where('user_id', '==', uid), where('membership_status', '==', 'active'));
-        const groupIds = [...new Set(memberships.map(member => member.group_id))];
-        for (const groupId of groupIds) {
-          loads.push(readCollection<Post>('posts', ...constraints, where('group_id', '==', groupId), where('visibility', '==', 'group_only')));
+        for (const groupId of [...new Set(memberships.map(member => member.group_id))]) {
+          loads.push(readCollection<Post>('posts', ...shared, where('group_id', '==', groupId), where('visibility', '==', 'group_only')));
         }
       }
     }
     const batches = await Promise.all(loads);
     const unique = [...new Map(batches.flat().map(post => [post.id, post])).values()];
-    const blocked = uid ? new Set((await this.getBlocks(uid)).map(block => block.blocked_id)) : new Set<string>();
+    const blocks = uid ? await this.getBlocks(uid) : [];
+    const blocked = new Set(blocks.map(block => block.blocked_id));
     let visible = unique.filter(post => !blocked.has(post.author_id));
     if (options?.authorId) visible = visible.filter(post => post.author_id === options.authorId);
     if (options?.sort === 'popular') visible.sort((a, b) => (b.likes_count || 0) - (a.likes_count || 0));
     else visible.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-    // Hydrate using real Firestore records. Like/comment counts are calculated from persisted documents.
     const authorIds = [...new Set(visible.map(post => post.author_id))];
     const authors = new Map<string, Profile>();
     await Promise.all(authorIds.map(async id => {
@@ -537,22 +535,11 @@ export const DataService = {
         }
         for (const comment of comments) commentsByPost.set(comment.post_id, (commentsByPost.get(comment.post_id) || 0) + 1);
       }
-      visible = visible.map(post => ({
-        ...post,
-        author: authors.get(post.author_id),
-        group: post.group_id ? groups.get(post.group_id) : undefined,
-        likes_count: likesByPost.get(post.id) ?? 0,
-        has_liked: likedByMe.has(post.id),
-        comments_count: commentsByPost.get(post.id) ?? 0,
-      }));
+      visible = visible.map(post => ({ ...post, author: authors.get(post.author_id), group: post.group_id ? groups.get(post.group_id) : undefined,
+        likes_count: likesByPost.get(post.id) ?? 0, has_liked: likedByMe.has(post.id), comments_count: commentsByPost.get(post.id) ?? 0 }));
     } else {
-      visible = visible.map(post => ({
-        ...post,
-        author: authors.get(post.author_id),
-        group: post.group_id ? groups.get(post.group_id) : undefined,
-      }));
+      visible = visible.map(post => ({ ...post, author: authors.get(post.author_id), group: post.group_id ? groups.get(post.group_id) : undefined }));
     }
-
     store.posts = visible;
     store.save();
     return visible;
@@ -592,7 +579,7 @@ export const DataService = {
       likes_count: 0, comments_count: 0, has_liked: false,
     };
     const { author: _author, group: _group, has_liked: _liked, ...payload } = post;
-    await setDoc(doc(db, 'posts', id), payload);
+    await setDoc(doc(db, 'posts', id), cleanFirestoreData(payload));
     store.posts.unshift(post);
     store.save();
     return { ...post, author: await this.getProfileById(uid) || undefined };
@@ -611,18 +598,18 @@ export const DataService = {
     if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in before liking a post.');
     const postSnapshot = await getDoc(doc(db, 'posts', postId));
     if (!postSnapshot.exists()) throw new Error('Post not found.');
-    const likeRef = doc(db, 'post_likes', postId + '_' + userId);
-    const likeSnapshot = await getDoc(likeRef);
+    const likeRecords = await readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', '==', postId), where('user_id', '==', userId));
+    const likeId = postId + '_' + userId;
     let liked: boolean;
-    if (likeSnapshot.exists()) {
-      await deleteDoc(likeRef);
+    if (likeRecords.length) {
+      await deleteDoc(doc(db, 'post_likes', likeId));
       liked = false;
     } else {
-      await setDoc(likeRef, { post_id: postId, user_id: userId, created_at: new Date().toISOString() });
+      await setDoc(doc(db, 'post_likes', likeId), { post_id: postId, user_id: userId, created_at: new Date().toISOString() });
       liked = true;
     }
-    const likes = await readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', '==', postId));
-    const count = likes.length;
+    const allLikes = await readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', '==', postId));
+    const count = allLikes.length;
     store.posts = store.posts.map(post => post.id === postId ? { ...post, likes_count: count, has_liked: liked } : post);
     store.save();
     return { liked, count };
@@ -688,8 +675,8 @@ export const DataService = {
     if (senderId === recipientId) throw new Error('Cannot send a friend request to yourself.');
     const recipient = await this.getProfileById(recipientId);
     if (!recipient || recipient.status !== 'active') throw new Error('This member is unavailable.');
-    if (store.blocks.some(block => (block.blocker_id === senderId && block.blocked_id === recipientId) ||
-      (block.blocker_id === recipientId && block.blocked_id === senderId))) throw new Error('A block prevents this request.');
+    const ownBlocks = await this.getBlocks(senderId);
+    if (ownBlocks.some(block => block.blocked_id === recipientId)) throw new Error('You have blocked this member.');
     const [outgoing, incoming, friendships] = await Promise.all([
       readCollection<FriendRequest>('friend_requests', where('sender_id', '==', senderId), where('recipient_id', '==', recipientId), where('status', '==', 'pending')),
       readCollection<FriendRequest>('friend_requests', where('sender_id', '==', recipientId), where('recipient_id', '==', senderId), where('status', '==', 'pending')),
