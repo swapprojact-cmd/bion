@@ -4,28 +4,47 @@ service firebase.storage {
   match /b/{bucket}/o {
     function signedIn() { return request.auth != null; }
     function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
     function validImage(maxBytes) {
-      return request.resource != null && request.resource.size > 0
+      return request.resource != null
+        && request.resource.size > 0
         && request.resource.size <= maxBytes
         && request.resource.contentType.matches('image/(jpeg|png|webp)');
     }
+
+    function validPostMedia() {
+      return request.resource != null
+        && request.resource.size > 0
+        && (
+          (request.resource.contentType.matches('image/(jpeg|png|webp)')
+            && request.resource.size <= 10 * 1024 * 1024)
+          || (request.resource.contentType.matches('video/(mp4|webm|quicktime)')
+            && request.resource.size <= 50 * 1024 * 1024)
+        );
+    }
+
     match /users/{uid}/avatars/{fileName} {
       allow read: if true;
       allow create, update: if isOwner(uid) && validImage(5 * 1024 * 1024);
       allow delete: if isOwner(uid);
     }
+
     match /users/{uid}/posts/{fileName} {
+      // Post media is available to signed-in community members.
       allow read: if signedIn();
-      allow create, update: if isOwner(uid) && validImage(10 * 1024 * 1024);
+      allow create, update: if isOwner(uid) && validPostMedia();
       allow delete: if isOwner(uid);
     }
+
+    // Storage Rules can only inspect the default Firestore database, while BiCircle
+    // uses a named Firestore database. Keep group file access closed until a trusted
+    // backend or custom-claim based authorization is implemented for that database.
     match /groups/{groupId}/{uid}/{fileName} {
-      allow read: if signedIn() && request.auth.uid in firestore.get(/databases/(default)/documents/groups/$(groupId)).data.memberIds;
-      allow create, update: if isOwner(uid)
-        && request.auth.uid in firestore.get(/databases/(default)/documents/groups/$(groupId)).data.memberIds
-        && validImage(10 * 1024 * 1024);
-      allow delete: if isOwner(uid);
+      allow read, write: if false;
     }
-    match /{allPaths=**} { allow read, write: if false; }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
   }
 }
