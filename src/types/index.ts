@@ -134,6 +134,8 @@ export interface Friendship {
   id: string;
   user_a: string;
   user_b: string;
+  /** The accepted request authorizing this relationship, when newly created. */
+  request_id?: string;
   created_at: string;
   friend?: Profile;
 }

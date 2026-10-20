@@ -35,6 +35,7 @@ interface CommunityContextType {
   sortFeed: 'latest' | 'popular';
   setSortFeed: (sort: 'latest' | 'popular') => void;
   isLoadingFeed: boolean;
+  dataSyncWarnings: string[];
 
   // Actions
   refreshAll: () => Promise<void>;
@@ -105,45 +106,50 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [moderationActions, setModerationActions] = useState<ModerationAction[]>([]);
   const [sortFeed, setSortFeed] = useState<'latest' | 'popular'>('latest');
   const [isLoadingFeed, setIsLoadingFeed] = useState<boolean>(false);
+  const [dataSyncWarnings, setDataSyncWarnings] = useState<string[]>([]);
 
   const refreshAll = useCallback(async () => {
-    if (!currentUser) return;
+    if (!currentUser) {
+      setDataSyncWarnings([]);
+      return;
+    }
     setIsLoadingFeed(true);
     try {
-      const [
-        loadedPosts,
-        loadedGroups,
-        loadedFriends,
-        loadedReqs,
-        loadedConvs,
-        loadedNotifs,
-        loadedBlocks,
-        loadedReps,
-        loadedActions,
-      ] = await Promise.all([
-        DataService.getPosts({ currentUserId: currentUser.id, sort: sortFeed }),
-        DataService.getGroups(currentUser.id),
-        DataService.getFriendships(currentUser.id),
-        DataService.getFriendRequests(currentUser.id),
-        DataService.getConversations(currentUser.id),
-        DataService.getNotifications(currentUser.id),
-        DataService.getBlocks(currentUser.id),
-        currentUser.is_moderator || currentUser.is_admin ? DataService.getReports() : Promise.resolve([]),
-        currentUser.is_moderator || currentUser.is_admin ? DataService.getModerationActions() : Promise.resolve([]),
+      const settled = await Promise.all([
+        DataService.getPosts({ currentUserId: currentUser.id, sort: sortFeed }).then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error })),
+        DataService.getGroups(currentUser.id).then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error })),
+        DataService.getFriendships(currentUser.id).then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error })),
+        DataService.getFriendRequests(currentUser.id).then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error })),
+        DataService.getConversations(currentUser.id).then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error })),
+        DataService.getNotifications(currentUser.id).then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error })),
+        DataService.getBlocks(currentUser.id).then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error })),
+        (currentUser.is_moderator || currentUser.is_admin ? DataService.getReports() : Promise.resolve([])).then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error })),
+        (currentUser.is_moderator || currentUser.is_admin ? DataService.getModerationActions() : Promise.resolve([])).then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error })),
       ]);
 
-      setPosts(loadedPosts);
-      setGroups(loadedGroups);
-      setFriends(loadedFriends);
-      setIncomingRequests(loadedReqs.incoming);
-      setOutgoingRequests(loadedReqs.outgoing);
-      setConversations(loadedConvs);
-      setNotifications(loadedNotifs);
-      setBlockedUsers(loadedBlocks);
-      setReports(loadedReps);
-      setModerationActions(loadedActions);
-    } catch (err) {
-      console.error('Failed to load community state:', err);
+      const warnings: string[] = [];
+      const apply = <T,>(result: typeof settled[number], label: string, update: (value: T) => void) => {
+        if (result.ok) {
+          update(result.value as T);
+        } else {
+          warnings.push(label);
+          console.error('Firestore sync failed for ' + label + ':', result.error);
+        }
+      };
+
+      apply<Post[]>(settled[0], 'community posts', setPosts);
+      apply<Group[]>(settled[1], 'groups and circles', setGroups);
+      apply<Profile[]>(settled[2], 'friendships', setFriends);
+      apply<{ incoming: FriendRequest[]; outgoing: FriendRequest[] }>(settled[3], 'friend requests', value => {
+        setIncomingRequests(value.incoming);
+        setOutgoingRequests(value.outgoing);
+      });
+      apply<Conversation[]>(settled[4], 'messages', setConversations);
+      apply<Notification[]>(settled[5], 'notifications', setNotifications);
+      apply<Block[]>(settled[6], 'blocked users', setBlockedUsers);
+      apply<Report[]>(settled[7], 'reports', setReports);
+      apply<ModerationAction[]>(settled[8], 'moderation history', setModerationActions);
+      setDataSyncWarnings(warnings);
     } finally {
       setIsLoadingFeed(false);
     }
@@ -404,6 +410,7 @@ export const CommunityProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         sortFeed,
         setSortFeed,
         isLoadingFeed,
+        dataSyncWarnings,
         refreshAll,
         createPost,
         deletePost,

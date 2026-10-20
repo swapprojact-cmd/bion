@@ -2,9 +2,9 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { Profile, UserPrivate } from '../types';
 import { DataService, store } from '../lib/dataService';
-import { auth, db } from '../lib/firebase';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { auth, db, validateFirestoreConnection } from '../lib/firebase';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, deleteUser } from 'firebase/auth';
+import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 
 interface AuthContextType {
   currentUser: Profile | null;
@@ -14,6 +14,7 @@ interface AuthContextType {
   isModerator: boolean;
   isAdmin: boolean;
   firebaseConnected: boolean;
+  firebaseConnectionChecked: boolean;
   login: (email: string, pass: string) => Promise<{ success: boolean; error?: string }>;
   signup: (data: { email: string; pass: string; displayName: string; username: string; birthYear?: number }) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
@@ -29,9 +30,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [userPrivate, setUserPrivate] = useState<UserPrivate | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [firebaseConnected, setFirebaseConnected] = useState<boolean>(true);
+  const [firebaseConnected, setFirebaseConnected] = useState<boolean>(false);
+  const [firebaseConnectionChecked, setFirebaseConnectionChecked] = useState<boolean>(false);
 
   useEffect(() => {
+    let active = true;
+    void validateFirestoreConnection().then(connected => {
+      if (active) {
+        setFirebaseConnected(connected);
+        setFirebaseConnectionChecked(true);
+      }
+    }).catch(error => {
+      console.error('Firestore connection validation failed:', error);
+      if (active) {
+        setFirebaseConnected(false);
+        setFirebaseConnectionChecked(true);
+      }
+    });
+
     // Firebase Auth is the source of truth; never restore a session from a client-controlled user ID.
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setIsLoading(true);
@@ -61,7 +77,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsLoading(false);
       }
     });
-    return unsubscribe;
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, []);
 
   const login = async (email: string, pass: string) => {
@@ -90,6 +109,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signup = async (data: { email: string; pass: string; displayName: string; username: string; birthYear?: number }) => {
     setIsLoading(true);
+    let createdUid: string | null = null;
     try {
       const email = data.email.trim().toLowerCase();
       const displayName = data.displayName.trim();
@@ -100,6 +120,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const credential = await createUserWithEmailAndPassword(auth, email, data.pass);
       const uid = credential.user.uid;
+      createdUid = uid;
       const now = new Date().toISOString();
       const newProfile: Profile = {
         id: uid,
@@ -131,8 +152,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Fail signup if Firestore profile creation fails; do not create a local fake account.
       await setDoc(doc(db, 'profiles', uid), newProfile);
       await setDoc(doc(db, 'user_private', uid), privateProfile);
-      // Keep the current legacy data service's local cache in sync while its full
-      // Firestore migration is pending; this cache is not an authentication source.
+      // Keep the same-browser cache warm for immediate UI updates; Firestore remains authoritative.
       store.profiles = store.profiles.filter(profile => profile.id !== uid);
       store.profiles.push(newProfile);
       store.userPrivateMap[uid] = privateProfile;
@@ -142,6 +162,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (typeof window !== 'undefined') localStorage.setItem('bicircle_current_user_id', uid);
       return { success: true };
     } catch (e: any) {
+      // If account creation succeeded but a required Firestore write failed, roll back
+      // the partial profile so future logins do not end up with an orphaned auth account.
+      if (createdUid && auth.currentUser?.uid === createdUid) {
+        try { await deleteDoc(doc(db, 'user_private', createdUid)); } catch (cleanupError) { console.warn('Could not clean up partial private profile:', cleanupError); }
+        try { await deleteDoc(doc(db, 'profiles', createdUid)); } catch (cleanupError) { console.warn('Could not clean up partial public profile:', cleanupError); }
+        try { await deleteUser(auth.currentUser); } catch (cleanupError) { console.warn('Could not roll back the partially created Firebase Auth account:', cleanupError); }
+        setCurrentUser(null);
+        setUserPrivate(null);
+      }
       return { success: false, error: e.code === 'auth/email-already-in-use' ? 'An account already exists for this email.' : (e.message || 'Signup failed') };
     } finally {
       setIsLoading(false);
@@ -192,6 +221,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isModerator: !!currentUser?.is_moderator || !!currentUser?.is_admin,
         isAdmin: !!currentUser?.is_admin,
         firebaseConnected,
+        firebaseConnectionChecked,
         login,
         signup,
         logout,

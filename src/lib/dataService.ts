@@ -33,8 +33,8 @@ import {
   INITIAL_REPORTS,
   INITIAL_MODERATION_ACTIONS,
 } from './initialData';
-import { db } from './firebase';
-import { doc, setDoc, updateDoc, deleteDoc, getDoc, getDocs, collection } from 'firebase/firestore';
+import { auth, db } from './firebase';
+import { doc, setDoc, updateDoc, deleteDoc, getDoc, getDocs, collection, query, where, type QueryConstraint } from 'firebase/firestore';
 
 // Local storage keys
 const STORAGE_PREFIX = 'bicircle_store_';
@@ -163,6 +163,46 @@ class CommunityDataStore {
 
 export const store = new CommunityDataStore();
 
+/** Firestore is the durable source of truth. localStorage is only a same-browser cache. */
+function fromFirestore<T>(snapshot: { id: string; data: () => Record<string, any> }): T {
+  return { ...snapshot.data(), id: snapshot.id } as T;
+}
+
+async function readCollection<T>(name: string, ...constraints: QueryConstraint[]): Promise<T[]> {
+  const source = collection(db, name);
+  const result = await getDocs(constraints.length ? query(source, ...constraints) : source);
+  return result.docs.map(snapshot => fromFirestore<T>(snapshot));
+}
+
+function cacheCollection<T>(items: T[], key: keyof CommunityDataStore): void {
+  (store as any)[key] = items;
+  store.save();
+}
+
+
+function cleanFirestoreData<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(item => cleanFirestoreData(item)) as T;
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (item !== undefined) cleaned[key] = cleanFirestoreData(item);
+    }
+    return cleaned as T;
+  }
+  return value;
+}
+
+function firestoreErrorMessage(error: unknown): string {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const code = String((error as { code?: unknown }).code || '');
+    if (code.includes('permission-denied')) return 'Firebase denied this database operation. Check the deployed Firestore rules.';
+    if (code.includes('unavailable') || code.includes('network')) return 'Firebase is unreachable. Check the network and Firebase project configuration.';
+    if (code.includes('not-found')) return 'The configured Firestore database was not found.';
+  }
+  return error instanceof Error ? error.message : 'Unknown Firestore error';
+}
+
+
 // ==========================================
 // DATA SERVICE API
 // ==========================================
@@ -185,445 +225,365 @@ export function calculateDistanceKm(lat1?: number, lon1?: number, lat2?: number,
 export const DataService = {
   // Nearby & Community Profiles Discovery
   async getNearbyProfiles(currentUserId?: string, options?: {
-    maxDistanceKm?: number;
-    city?: string;
-    intention?: string;
-    searchQuery?: string;
+    maxDistanceKm?: number; city?: string; intention?: string; searchQuery?: string;
     coords?: { lat: number; lng: number };
   }): Promise<Profile[]> {
     const { maxDistanceKm, city, intention, searchQuery, coords } = options || {};
-    const currentUser = currentUserId ? store.profiles.find(p => p.id === currentUserId) : null;
-    const myLat = coords?.lat ?? currentUser?.location_lat ?? 40.6782;
-    const myLng = coords?.lng ?? currentUser?.location_lng ?? -73.9442;
-
-    let list = store.profiles
-      .filter(p => p.status === 'active' && p.show_in_nearby !== false)
-      .map(p => {
-        const dist = calculateDistanceKm(myLat, myLng, p.location_lat, p.location_lng);
-        return {
-          ...p,
-          distance_km: dist !== null ? dist : undefined,
-        };
-      });
-
-    if (currentUserId) {
-      list = list.filter(p => p.id !== currentUserId);
-      const blockedIds = store.blocks
-        .filter(b => b.blocker_id === currentUserId || b.blocked_id === currentUserId)
-        .map(b => (b.blocker_id === currentUserId ? b.blocked_id : b.blocker_id));
-      list = list.filter(p => !blockedIds.includes(p.id));
-    }
-
-    if (city && city !== 'All') {
-      list = list.filter(p => p.location_city?.toLowerCase().includes(city.toLowerCase()));
-    }
-
-    if (intention && intention !== 'All') {
-      list = list.filter(p =>
-        p.relationship_intentions?.some(i => i.toLowerCase().includes(intention.toLowerCase()))
-      );
-    }
-
-    if (maxDistanceKm != null && maxDistanceKm > 0) {
-      list = list.filter(p => p.distance_km != null && p.distance_km <= maxDistanceKm);
-    }
-
-    if (searchQuery && searchQuery.trim()) {
+    const current = currentUserId ? await this.getProfileById(currentUserId) : null;
+    const myLat = coords?.lat ?? current?.location_lat;
+    const myLng = coords?.lng ?? current?.location_lng;
+    const profiles = await this.getProfiles();
+    const blocks = currentUserId ? await this.getBlocks(currentUserId) : [];
+    const blockedIds = new Set(blocks.map(block => block.blocked_id));
+    let list = profiles.filter(profile =>
+      profile.status === 'active' && profile.show_in_nearby !== false &&
+      profile.id !== currentUserId && !blockedIds.has(profile.id)
+    ).map(profile => ({
+      ...profile,
+      distance_km: myLat != null && myLng != null
+        ? calculateDistanceKm(myLat, myLng, profile.location_lat, profile.location_lng) ?? undefined
+        : undefined,
+    }));
+    if (city && city !== 'All') list = list.filter(p => p.location_city?.toLowerCase().includes(city.toLowerCase()));
+    if (intention && intention !== 'All') list = list.filter(p => p.relationship_intentions?.some(i => i.toLowerCase().includes(intention.toLowerCase())));
+    if (maxDistanceKm != null && maxDistanceKm > 0) list = list.filter(p => p.distance_km != null && p.distance_km <= maxDistanceKm);
+    if (searchQuery?.trim()) {
       const q = searchQuery.toLowerCase();
-      list = list.filter(p =>
-        p.display_name.toLowerCase().includes(q) ||
-        p.username.toLowerCase().includes(q) ||
-        p.bio?.toLowerCase().includes(q) ||
-        p.interests.some(i => i.toLowerCase().includes(q)) ||
-        p.relationship_vibe?.toLowerCase().includes(q) ||
-        p.location_city?.toLowerCase().includes(q)
-      );
+      list = list.filter(p => p.display_name.toLowerCase().includes(q) || p.username.toLowerCase().includes(q) ||
+        p.bio?.toLowerCase().includes(q) || p.interests.some(i => i.toLowerCase().includes(q)) ||
+        p.relationship_vibe?.toLowerCase().includes(q) || p.location_city?.toLowerCase().includes(q));
     }
-
-    return list.sort((a, b) => (a.distance_km ?? 99999) - (b.distance_km ?? 99999));
+    return list.sort((a, b) => (a.distance_km ?? Number.POSITIVE_INFINITY) - (b.distance_km ?? Number.POSITIVE_INFINITY));
   },
-
   async addProfilePhoto(userId: string, photo: { url: string; caption?: string; is_18_plus?: boolean }): Promise<Profile> {
-    const p = store.profiles.find(x => x.id === userId);
-    if (!p) throw new Error('Profile not found');
-    const newPhoto = {
-      id: 'photo_' + Date.now(),
-      type: 'photo' as const,
-      url: photo.url,
-      caption: photo.caption || '',
-      is_18_plus: !!photo.is_18_plus,
-      created_at: new Date().toISOString(),
-    };
-    p.photos = [newPhoto, ...(p.photos || [])];
-    p.updated_at = new Date().toISOString();
-    store.save();
-    try {
-      await setDoc(doc(db, 'profiles', userId), p, { merge: true });
-    } catch (e) {
-      console.warn('Firestore sync photo:', e);
-    }
-    return p;
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to edit your own gallery.');
+    const profile = await this.getProfileById(userId);
+    if (!profile) throw new Error('Profile not found in Firestore.');
+    const newPhoto = { id: 'photo_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16), type: 'photo' as const,
+      url: photo.url, caption: photo.caption || '', is_18_plus: !!photo.is_18_plus, created_at: new Date().toISOString() };
+    return this.updateProfile(userId, { photos: [newPhoto, ...(profile.photos || [])] });
   },
-
   async addProfileVideo(userId: string, video: { url: string; title: string; caption?: string; thumbnail_url?: string; is_18_plus?: boolean }): Promise<Profile> {
-    const p = store.profiles.find(x => x.id === userId);
-    if (!p) throw new Error('Profile not found');
-    const newVideo = {
-      id: 'vid_' + Date.now(),
-      type: 'video' as const,
-      url: video.url,
-      title: video.title,
-      caption: video.caption || '',
-      thumbnail_url: video.thumbnail_url || 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&w=600&q=80',
-      duration: '0:15',
-      is_18_plus: !!video.is_18_plus,
-      created_at: new Date().toISOString(),
-    };
-    p.videos = [newVideo, ...(p.videos || [])];
-    p.updated_at = new Date().toISOString();
-    store.save();
-    try {
-      await setDoc(doc(db, 'profiles', userId), p, { merge: true });
-    } catch (e) {
-      console.warn('Firestore sync video:', e);
-    }
-    return p;
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to edit your own gallery.');
+    const profile = await this.getProfileById(userId);
+    if (!profile) throw new Error('Profile not found in Firestore.');
+    const newVideo = { id: 'vid_' + crypto.randomUUID().replace(/-/g, '').slice(0, 16), type: 'video' as const,
+      url: video.url, title: video.title, caption: video.caption || '', thumbnail_url: video.thumbnail_url || '',
+      duration: '0:15', is_18_plus: !!video.is_18_plus, created_at: new Date().toISOString() };
+    return this.updateProfile(userId, { videos: [newVideo, ...(profile.videos || [])] });
   },
-
   async deleteProfileMedia(userId: string, mediaId: string, type: 'photo' | 'video'): Promise<Profile> {
-    const p = store.profiles.find(x => x.id === userId);
-    if (!p) throw new Error('Profile not found');
-    if (type === 'photo') {
-      p.photos = (p.photos || []).filter(item => item.id !== mediaId);
-    } else {
-      p.videos = (p.videos || []).filter(item => item.id !== mediaId);
-    }
-    p.updated_at = new Date().toISOString();
-    store.save();
-    try {
-      await setDoc(doc(db, 'profiles', userId), p, { merge: true });
-    } catch (e) {
-      console.warn('Firestore sync delete media:', e);
-    }
-    return p;
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to edit your own gallery.');
+    const profile = await this.getProfileById(userId);
+    if (!profile) throw new Error('Profile not found in Firestore.');
+    return this.updateProfile(userId, type === 'photo'
+      ? { photos: (profile.photos || []).filter(item => item.id !== mediaId) }
+      : { videos: (profile.videos || []).filter(item => item.id !== mediaId) });
   },
-
   async seedFirestoreWithInitialData(): Promise<{ success: boolean; count: number }> {
-    let count = 0;
-    try {
-      for (const p of store.profiles) {
-        await setDoc(doc(db, 'profiles', p.id), p, { merge: true });
-        count++;
-      }
-      for (const g of store.groups) {
-        await setDoc(doc(db, 'groups', g.id), g, { merge: true });
-        count++;
-      }
-      for (const post of store.posts) {
-        await setDoc(doc(db, 'posts', post.id), post, { merge: true });
-        count++;
-      }
-      return { success: true, count };
-    } catch (e) {
-      console.error('Error seeding Firestore:', e);
-      return { success: false, count };
-    }
+    // Never upload demo fixtures into a production database.
+    console.warn('Firestore fixture seeding is disabled. Create real data through the app.');
+    return { success: false, count: 0 };
   },
-
-  // Profiles
   async getProfiles(): Promise<Profile[]> {
-    try {
-      const snap = await getDocs(collection(db, 'profiles'));
-      if (!snap.empty) {
-        const live = snap.docs.map(d => d.data() as Profile);
-        if (live.length > 0) return live.filter(p => p.status === 'active');
-      }
-    } catch {
-      // fallback to store
+    const publicProfiles = await readCollection<Profile>('profiles', where('visibility', '==', 'public'));
+    const memberProfiles = auth.currentUser
+      ? await readCollection<Profile>('profiles', where('visibility', '==', 'members_only'))
+      : [];
+    const live = [...new Map([...publicProfiles, ...memberProfiles].map(profile => [profile.id, profile])).values()]
+      .filter(profile => profile.status === 'active');
+    if (auth.currentUser && !live.some(profile => profile.id === auth.currentUser?.uid)) {
+      const mine = await this.getProfileById(auth.currentUser.uid);
+      if (mine) live.push(mine);
     }
-    return store.profiles.filter(p => p.status === 'active');
+    cacheCollection(live, 'profiles');
+    return live;
   },
-
   async getProfileById(id: string): Promise<Profile | null> {
     try {
-      const docSnap = await getDoc(doc(db, 'profiles', id));
-      if (docSnap.exists()) {
-        return docSnap.data() as Profile;
-      }
-    } catch {
-      // fallback
+      const snapshot = await getDoc(doc(db, 'profiles', id));
+      return snapshot.exists() ? ({ ...snapshot.data(), id: snapshot.id } as Profile) : null;
+    } catch (error: any) {
+      if (error?.code === 'permission-denied' || error?.code === 'firestore/permission-denied') return null;
+      throw new Error('Could not load profile from Firestore: ' + firestoreErrorMessage(error));
     }
-    return store.profiles.find(p => p.id === id) || null;
   },
-
   async updateProfile(id: string, updates: Partial<Profile>): Promise<Profile> {
-    const idx = store.profiles.findIndex(p => p.id === id);
-    if (idx !== -1) {
-      store.profiles[idx] = {
-        ...store.profiles[idx],
-        ...updates,
-        updated_at: new Date().toISOString(),
-      };
-      store.save();
-
-      try {
-        await setDoc(doc(db, 'profiles', id), store.profiles[idx], { merge: true });
-      } catch (e) {
-        console.warn('Firestore profile sync:', e);
-      }
-
-      return store.profiles[idx];
-    }
-    throw new Error('Profile not found');
-  },
-
-  // User Private Settings
-  async getUserPrivate(userId: string): Promise<UserPrivate> {
-    try {
-      const docSnap = await getDoc(doc(db, 'user_private', userId));
-      if (docSnap.exists()) {
-        return docSnap.data() as UserPrivate;
-      }
-    } catch {
-      // fallback
-    }
-
-    if (!store.userPrivateMap[userId]) {
-      store.userPrivateMap[userId] = {
-        user_id: userId,
-        messaging_permission: 'everyone',
-        allow_friend_requests: true,
-        email_notifications: true,
-        notify_messages: true,
-        notify_comments: true,
-        notify_friend_requests: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-      store.save();
-
-      try {
-        await setDoc(doc(db, 'user_private', userId), store.userPrivateMap[userId], { merge: true });
-      } catch {
-        // quiet
-      }
-    }
-    return store.userPrivateMap[userId];
-  },
-
-  async updateUserPrivate(userId: string, updates: Partial<UserPrivate>): Promise<UserPrivate> {
-    const current = await this.getUserPrivate(userId);
-    store.userPrivateMap[userId] = {
-      ...current,
-      ...updates,
-      updated_at: new Date().toISOString(),
-    };
+    if (auth.currentUser?.uid !== id) throw new Error('You can update only your own profile.');
+    const current = await this.getProfileById(id);
+    if (!current) throw new Error('Profile not found in Firestore.');
+    const updated: Profile = { ...current, ...updates, id, updated_at: new Date().toISOString() };
+    const { distance_km: _distance, ...payload } = updated;
+    await setDoc(doc(db, 'profiles', id), cleanFirestoreData(payload), { merge: true });
+    const index = store.profiles.findIndex(p => p.id === id);
+    if (index >= 0) store.profiles[index] = updated; else store.profiles.push(updated);
     store.save();
-
-    try {
-      await setDoc(doc(db, 'user_private', userId), store.userPrivateMap[userId], { merge: true });
-    } catch (e) {
-      console.warn('Firestore user_private sync:', e);
-    }
-
-    return store.userPrivateMap[userId];
+    return updated;
   },
-
-  // Groups
+  async getUserPrivate(userId: string): Promise<UserPrivate> {
+    if (auth.currentUser?.uid !== userId) throw new Error('You can read only your own private settings.');
+    const snapshot = await getDoc(doc(db, 'user_private', userId));
+    if (snapshot.exists()) {
+      const value = { ...snapshot.data(), user_id: userId } as UserPrivate;
+      store.userPrivateMap[userId] = value;
+      store.save();
+      return value;
+    }
+    const now = new Date().toISOString();
+    const defaults: UserPrivate = {
+      user_id: userId, messaging_permission: 'everyone', allow_friend_requests: true,
+      email_notifications: true, notify_messages: true, notify_comments: true,
+      notify_friend_requests: true, created_at: now, updated_at: now,
+    };
+    await setDoc(doc(db, 'user_private', userId), defaults);
+    store.userPrivateMap[userId] = defaults;
+    store.save();
+    return defaults;
+  },
+  async updateUserPrivate(userId: string, updates: Partial<UserPrivate>): Promise<UserPrivate> {
+    if (auth.currentUser?.uid !== userId) throw new Error('You can update only your own private settings.');
+    const current = await this.getUserPrivate(userId);
+    const updated: UserPrivate = { ...current, ...updates, user_id: userId, updated_at: new Date().toISOString() };
+    await setDoc(doc(db, 'user_private', userId), updated, { merge: true });
+    store.userPrivateMap[userId] = updated;
+    store.save();
+    return updated;
+  },
   async getGroups(currentUserId?: string): Promise<Group[]> {
-    try {
-      const snap = await getDocs(collection(db, 'groups'));
-      if (!snap.empty) {
-        const live = snap.docs.map(d => d.data() as Group);
-        if (live.length > 0) {
-          return live.map(group => {
-            const members = store.groupMembers.filter(gm => gm.group_id === group.id && gm.membership_status === 'active');
-            const userMember = currentUserId
-              ? store.groupMembers.find(gm => gm.group_id === group.id && gm.user_id === currentUserId)
-              : undefined;
-
-            return {
-              ...group,
-              member_count: members.length || group.member_count || 1,
-              is_member: userMember?.membership_status === 'active',
-              membership_status: userMember?.membership_status,
-              user_role: userMember?.role,
-            };
-          });
-        }
+    const publicGroups = await readCollection<Group>('groups', where('visibility', '==', 'public'));
+    let ownMemberships: GroupMember[] = [];
+    let discoverablePrivateGroups: Group[] = [];
+    let joinedGroups: Group[] = [];
+    if (currentUserId && auth.currentUser?.uid === currentUserId) {
+      // Private groups are discoverable to signed-in members so they can read the
+      // group's rules and request approval; membership stays private and separately controlled.
+      discoverablePrivateGroups = await readCollection<Group>('groups', where('visibility', '==', 'private'));
+      ownMemberships = await readCollection<GroupMember>('group_members', where('user_id', '==', currentUserId));
+      const privateIds = new Set(ownMemberships.map(m => m.group_id));
+      for (const groupId of privateIds) {
+        if (publicGroups.some(group => group.id === groupId) || discoverablePrivateGroups.some(group => group.id === groupId)) continue;
+        const snapshot = await getDoc(doc(db, 'groups', groupId));
+        if (snapshot.exists()) joinedGroups.push({ ...snapshot.data(), id: snapshot.id } as Group);
       }
-    } catch {
-      // fallback
     }
-
-    return store.groups.map(group => {
-      const members = store.groupMembers.filter(gm => gm.group_id === group.id && gm.membership_status === 'active');
-      const userMember = currentUserId
-        ? store.groupMembers.find(gm => gm.group_id === group.id && gm.user_id === currentUserId)
-        : undefined;
-
-      return {
-        ...group,
-        member_count: members.length || group.member_count || 1,
-        is_member: userMember?.membership_status === 'active',
-        membership_status: userMember?.membership_status,
-        user_role: userMember?.role,
-      };
-    });
+    store.groupMembers = ownMemberships;
+    const combined = [...new Map([...publicGroups, ...discoverablePrivateGroups, ...joinedGroups].map(group => [group.id, group])).values()]
+      .filter(group => group.status === 'active')
+      .map(group => {
+        const own = ownMemberships.find(m => m.group_id === group.id);
+        return { ...group, is_member: own?.membership_status === 'active',
+          membership_status: own?.membership_status, user_role: own?.role };
+      });
+    store.groups = combined;
+    store.save();
+    return combined;
   },
-
   async getGroupById(groupId: string, currentUserId?: string): Promise<Group | null> {
     const all = await this.getGroups(currentUserId);
-    return all.find(g => g.id === groupId || g.slug === groupId) || null;
+    const cached = all.find(group => group.id === groupId || group.slug === groupId);
+    if (cached) return cached;
+    try {
+      const snapshot = await getDoc(doc(db, 'groups', groupId));
+      if (!snapshot.exists()) return null;
+      return { ...snapshot.data(), id: snapshot.id } as Group;
+    } catch (error: any) {
+      if (error?.code === 'permission-denied' || error?.code === 'firestore/permission-denied') return null;
+      throw new Error('Could not load group from Firestore: ' + firestoreErrorMessage(error));
+    }
   },
-
   async getGroupMembers(groupId: string): Promise<GroupMember[]> {
-    const list = store.groupMembers.filter(m => m.group_id === groupId);
-    return list.map(m => ({
-      ...m,
-      profile: store.profiles.find(p => p.id === m.user_id),
-    }));
+    const uid = auth.currentUser?.uid;
+    if (!uid) throw new Error('Sign in to view group membership.');
+    const ownMemberships = await readCollection<GroupMember>('group_members', where('user_id', '==', uid));
+    if (!ownMemberships.some(member => member.group_id === groupId && member.membership_status === 'active')) return [];
+    const members = await readCollection<GroupMember>('group_members', where('group_id', '==', groupId));
+    const visible = await Promise.all(members.filter(m => m.membership_status === 'active').map(async member => ({
+      ...member, profile: await this.getProfileById(member.user_id) || undefined,
+    })));
+    store.groupMembers = store.groupMembers.filter(member => member.group_id !== groupId).concat(members);
+    store.save();
+    return visible;
   },
-
   async createGroup(data: Omit<Group, 'id' | 'created_at' | 'updated_at'>): Promise<Group> {
-    const newGroup: Group = {
-      ...data,
-      id: 'grp_' + Date.now(),
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      member_count: 1,
-      is_member: true,
-      membership_status: 'active',
-      user_role: 'owner',
-    };
-
-    store.groups.unshift(newGroup);
-    // Add owner as group member
-    store.groupMembers.push({
-      group_id: newGroup.id,
-      user_id: data.owner_id,
-      role: 'owner',
-      membership_status: 'active',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
+    const uid = auth.currentUser?.uid;
+    if (!uid || data.owner_id !== uid) throw new Error('Sign in as the group owner before creating a group.');
+    const id = 'grp_' + crypto.randomUUID().replace(/-/g, '').slice(0, 18);
+    const now = new Date().toISOString();
+    const group: Group = { ...data, id, created_at: now, updated_at: now, member_count: 1, is_member: true, membership_status: 'active', user_role: 'owner' };
+    const { is_member: _isMember, membership_status: _membership, user_role: _role, member_count: _memberCount, ...groupPayload } = group;
+    const membership: GroupMember = { group_id: id, user_id: uid, role: 'owner', membership_status: 'active', created_at: now, updated_at: now };
+    await setDoc(doc(db, 'groups', id), groupPayload);
+    try {
+      await setDoc(doc(db, 'group_members', id + '_' + uid), membership);
+    } catch (error) {
+      await deleteDoc(doc(db, 'groups', id));
+      throw new Error('Group was not created because owner membership could not be saved: ' + firestoreErrorMessage(error));
+    }
+    store.groups.unshift(group);
+    store.groupMembers.push(membership);
     store.save();
-    return newGroup;
+    return group;
   },
-
   async joinGroup(groupId: string, userId: string): Promise<GroupMember> {
-    const existing = store.groupMembers.find(gm => gm.group_id === groupId && gm.user_id === userId);
-    const targetGroup = store.groups.find(g => g.id === groupId);
-    const status = targetGroup?.visibility === 'private' ? 'pending' : 'active';
-
-    if (existing) {
-      existing.membership_status = status;
-      existing.updated_at = new Date().toISOString();
-      store.save();
-      return existing;
-    }
-
-    const newMember: GroupMember = {
-      group_id: groupId,
-      user_id: userId,
-      role: 'member',
-      membership_status: status,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in before joining a group.');
+    const group = await this.getGroupById(groupId, userId);
+    if (!group) throw new Error('Group not found or you do not have access.');
+    const ownMemberships = await readCollection<GroupMember>('group_members', where('user_id', '==', userId));
+    store.groupMembers = ownMemberships;
+    const existing = ownMemberships.find(member => member.group_id === groupId && member.user_id === userId);
+    const now = new Date().toISOString();
+    const membership: GroupMember = {
+      group_id: groupId, user_id: userId, role: existing?.role === 'owner' ? 'owner' : 'member',
+      membership_status: group.visibility === 'private' && existing?.role !== 'owner' ? 'pending' : 'active',
+      created_at: existing?.created_at || now, updated_at: now,
     };
-    store.groupMembers.push(newMember);
-
-    // If private group, notify owner
-    if (status === 'pending' && targetGroup) {
-      this.createNotification({
-        recipient_id: targetGroup.owner_id,
-        actor_id: userId,
-        type: 'group_invite',
-        reference_type: 'group',
-        reference_id: groupId,
-        message: `requested to join ${targetGroup.name}`,
-      });
-    }
-
+    const ref = doc(db, 'group_members', groupId + '_' + userId);
+    if (existing) await setDoc(ref, membership, { merge: true }); else await setDoc(ref, membership);
+    store.groupMembers = store.groupMembers.filter(m => !(m.group_id === groupId && m.user_id === userId)).concat(membership);
     store.save();
-    return newMember;
+    if (membership.membership_status === 'pending') void this.createNotification({ recipient_id: group.owner_id, actor_id: userId, type: 'group_invite', reference_type: 'group', reference_id: groupId, message: 'requested to join ' + group.name });
+    return membership;
   },
-
   async leaveGroup(groupId: string, userId: string): Promise<void> {
-    store.groupMembers = store.groupMembers.filter(
-      gm => !(gm.group_id === groupId && gm.user_id === userId)
-    );
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in before leaving a group.');
+    const group = await this.getGroupById(groupId, userId);
+    if (group?.owner_id === userId) throw new Error('Transfer group ownership before leaving your own group.');
+    await deleteDoc(doc(db, 'group_members', groupId + '_' + userId));
+    store.groupMembers = store.groupMembers.filter(member => !(member.group_id === groupId && member.user_id === userId));
     store.save();
   },
-
   async updateMemberStatus(groupId: string, userId: string, status: 'active' | 'rejected'): Promise<void> {
-    const member = store.groupMembers.find(gm => gm.group_id === groupId && gm.user_id === userId);
-    if (member) {
-      member.membership_status = status;
-      member.updated_at = new Date().toISOString();
-      store.save();
+    const uid = auth.currentUser?.uid;
+    if (!uid) throw new Error('Sign in before reviewing a group request.');
+    const group = await this.getGroupById(groupId, uid);
+    if (!group || group.owner_id !== uid) throw new Error('Only this group owner can review join requests.');
+    const ref = doc(db, 'group_members', groupId + '_' + userId);
+    const snapshot = await getDoc(ref);
+    if (!snapshot.exists()) throw new Error('Group membership request not found.');
+    const membershipStatus = status === 'rejected' ? 'rejected' : 'active';
+    await updateDoc(ref, { membership_status: membershipStatus, updated_at: new Date().toISOString() });
+    const member = { ...snapshot.data(), group_id: groupId, user_id: userId, membership_status: membershipStatus } as GroupMember;
+    store.groupMembers = store.groupMembers.filter(m => !(m.group_id === groupId && m.user_id === userId)).concat(member);
+    store.save();
+    if (status === 'active') void this.createNotification({ recipient_id: userId, actor_id: uid, type: 'group_approved', reference_type: 'group', reference_id: groupId, message: 'Your request to join ' + group.name + ' was approved.' });
+  },
+  async getPosts(options?: {
+    currentUserId?: string; groupId?: string; sort?: 'latest' | 'popular'; authorId?: string;
+  }): Promise<Post[]> {
+    const uid = auth.currentUser?.uid || null;
+    if (options?.currentUserId && options.currentUserId !== uid) throw new Error('The requested feed user does not match the signed-in account.');
+    const loads: Promise<Post[]>[] = [];
 
-      if (status === 'active') {
-        const grp = store.groups.find(g => g.id === groupId);
-        this.createNotification({
-          recipient_id: userId,
-          actor_id: member.user_id,
-          type: 'group_approved',
-          reference_type: 'group',
-          reference_id: groupId,
-          message: `Your request to join ${grp?.name || 'the group'} was approved!`,
-        });
+    if (options?.groupId) {
+      if (!uid) return [];
+      const groups = await this.getGroups(uid);
+      if (!groups.some(group => group.id === options.groupId && group.is_member)) return [];
+      loads.push(readCollection<Post>('posts',
+        where('group_id', '==', options.groupId),
+        where('visibility', '==', 'group_only'),
+        where('status', '==', 'published')));
+    } else if (options?.authorId) {
+      if (!uid) {
+        loads.push(readCollection<Post>('posts',
+          where('author_id', '==', options.authorId),
+          where('visibility', '==', 'public'),
+          where('status', '==', 'published')));
+      } else if (options.authorId === uid) {
+        // Owners may read all of their own posts; the UI filters to published posts below.
+        loads.push(readCollection<Post>('posts', where('author_id', '==', uid)));
+      } else {
+        loads.push(readCollection<Post>('posts',
+          where('author_id', '==', options.authorId),
+          where('visibility', '==', 'public'),
+          where('status', '==', 'published')));
+        if ((await this.getFriendships(uid)).some(friend => friend.id === options.authorId)) {
+          loads.push(readCollection<Post>('posts',
+            where('author_id', '==', options.authorId),
+            where('visibility', '==', 'friends_only'),
+            where('status', '==', 'published')));
+        }
+      }
+    } else {
+      loads.push(readCollection<Post>('posts',
+        where('visibility', '==', 'public'),
+        where('status', '==', 'published')));
+      if (uid) {
+        // Own posts are read separately so private posts aren't mixed with public queries.
+        loads.push(readCollection<Post>('posts', where('author_id', '==', uid)));
+        const friends = await this.getFriendships(uid);
+        for (const friend of friends) {
+          loads.push(readCollection<Post>('posts',
+            where('author_id', '==', friend.id),
+            where('visibility', '==', 'friends_only'),
+            where('status', '==', 'published')));
+        }
+        const memberships = await readCollection<GroupMember>('group_members', where('user_id', '==', uid));
+        for (const groupId of [...new Set(memberships.filter(m => m.membership_status === 'active').map(member => member.group_id))]) {
+          loads.push(readCollection<Post>('posts',
+            where('group_id', '==', groupId),
+            where('visibility', '==', 'group_only'),
+            where('status', '==', 'published')));
+        }
       }
     }
+
+    const batches = await Promise.all(loads);
+    const unique = [...new Map(batches.flat().filter(post => post.status === 'published').map(post => [post.id, post])).values()];
+    const blocks = uid ? await this.getBlocks(uid) : [];
+    const blocked = new Set(blocks.map(block => block.blocked_id));
+    let visible = unique.filter(post => !blocked.has(post.author_id));
+    if (options?.authorId) visible = visible.filter(post => post.author_id === options.authorId);
+    if (options?.sort === 'popular') visible.sort((a, b) => (b.likes_count || 0) - (a.likes_count || 0));
+    else visible.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    const authorIds = [...new Set(visible.map(post => post.author_id))];
+    const authors = new Map<string, Profile>();
+    await Promise.all(authorIds.map(async id => {
+      const author = await this.getProfileById(id);
+      if (author) authors.set(id, author);
+    }));
+    const groupIds = [...new Set(visible.map(post => post.group_id).filter((id): id is string => !!id))];
+    const groups = new Map<string, Group>();
+    await Promise.all(groupIds.map(async id => {
+      const group = await this.getGroupById(id, uid || undefined);
+      if (group) groups.set(id, group);
+    }));
+
+    if (uid && visible.length) {
+      const likesByPost = new Map<string, number>();
+      const likedByMe = new Set<string>();
+      const commentsByPost = new Map<string, number>();
+      // Query engagement one post at a time so each query's visibility can be checked by Firestore Rules.
+      for (let offset = 0; offset < visible.length; offset += 20) {
+        const batchPosts = visible.slice(offset, offset + 20);
+        const [likeBatches, commentBatches] = await Promise.all([
+          Promise.all(batchPosts.map(post =>
+            readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', '==', post.id))
+          )),
+          Promise.all(batchPosts.map(post =>
+            readCollection<Comment>('comments',
+              where('post_id', '==', post.id),
+              where('status', '==', 'published'))
+          )),
+        ]);
+        for (let i = 0; i < batchPosts.length; i++) {
+          const post = batchPosts[i];
+          const likes = likeBatches[i];
+          likesByPost.set(post.id, likes.length);
+          if (likes.some(like => like.user_id === uid)) likedByMe.add(post.id);
+          commentsByPost.set(post.id, commentBatches[i].length);
+        }
+      }
+      visible = visible.map(post => ({ ...post, author: authors.get(post.author_id), group: post.group_id ? groups.get(post.group_id) : undefined,
+        likes_count: likesByPost.get(post.id) ?? 0, has_liked: likedByMe.has(post.id), comments_count: commentsByPost.get(post.id) ?? 0 }));
+    } else {
+      visible = visible.map(post => ({ ...post, author: authors.get(post.author_id), group: post.group_id ? groups.get(post.group_id) : undefined }));
+    }
+
+    store.posts = visible;
+    store.save();
+    return visible;
   },
-
-  // Posts
-  async getPosts(options?: {
-    currentUserId?: string;
-    groupId?: string;
-    sort?: 'latest' | 'popular';
-    authorId?: string;
-  }): Promise<Post[]> {
-    const { currentUserId, groupId, sort = 'latest', authorId } = options || {};
-
-    let posts = [...store.posts].filter(p => p.status === 'published');
-
-    // Filter by group if specified
-    if (groupId) {
-      posts = posts.filter(p => p.group_id === groupId);
-    }
-
-    // Filter by author if specified
-    if (authorId) {
-      posts = posts.filter(p => p.author_id === authorId);
-    }
-
-    // Check blocked users
-    if (currentUserId) {
-      const blockedIds = store.blocks
-        .filter(b => b.blocker_id === currentUserId || b.blocked_id === currentUserId)
-        .map(b => (b.blocker_id === currentUserId ? b.blocked_id : b.blocker_id));
-
-      posts = posts.filter(p => !blockedIds.includes(p.author_id));
-    }
-
-    // Attach authors and groups
-    const populated = posts.map(p => {
-      const author = store.profiles.find(pr => pr.id === p.author_id);
-      const group = p.group_id ? store.groups.find(g => g.id === p.group_id) : undefined;
-      return {
-        ...p,
-        author,
-        group,
-      };
-    });
-
-    if (sort === 'popular') {
-      return populated.sort((a, b) => b.likes_count - a.likes_count);
-    }
-    return populated.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-  },
-
   async createPost(data: {
     author_id: string;
     body: string;
@@ -637,534 +597,423 @@ export const DataService = {
     location_lat?: number;
     location_lng?: number;
   }): Promise<Post> {
-    const newPost: Post = {
-      id: 'post_' + Date.now(),
-      author_id: data.author_id,
-      group_id: data.group_id || null,
-      body: data.body,
-      media_paths: data.media_paths || [],
-      video_url: data.video_url || undefined,
+    const uid = auth.currentUser?.uid;
+    if (!uid || uid !== data.author_id) throw new Error('Sign in before creating a post.');
+    const groupId = data.group_id || null;
+    const visibility = (data.visibility as Post['visibility']) || (groupId ? 'group_only' : 'public');
+    if (groupId && visibility === 'group_only') {
+      const membership = await getDoc(doc(db, 'group_members', groupId + '_' + uid));
+      if (!membership.exists() || membership.data().membership_status !== 'active') {
+        throw new Error('Join the circle before posting to it.');
+      }
+    }
+    const id = 'post_' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+    const now = new Date().toISOString();
+    const post: Post = {
+      id, author_id: uid, group_id: groupId, body: data.body.trim(),
+      media_paths: data.media_paths || [], video_url: data.video_url || undefined,
       media_type: data.media_type || (data.video_url ? 'video' : data.media_paths?.length ? 'photo' : undefined),
-      is_18_plus: !!data.is_18_plus,
-      location_name: data.location_name,
-      location_lat: data.location_lat,
-      location_lng: data.location_lng,
-      visibility: (data.visibility as any) || (data.group_id ? 'group_only' : 'public'),
-      status: 'published',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      likes_count: 0,
-      comments_count: 0,
-      has_liked: false,
-      author: store.profiles.find(p => p.id === data.author_id),
-      group: data.group_id ? store.groups.find(g => g.id === data.group_id) : undefined,
+      is_18_plus: !!data.is_18_plus, location_name: data.location_name,
+      location_lat: data.location_lat, location_lng: data.location_lng,
+      visibility, status: 'published', created_at: now, updated_at: now,
+      likes_count: 0, comments_count: 0, has_liked: false,
     };
-
-    store.posts.unshift(newPost);
+    const { author: _author, group: _group, has_liked: _liked, ...payload } = post;
+    await setDoc(doc(db, 'posts', id), cleanFirestoreData(payload));
+    store.posts.unshift(post);
     store.save();
-
-    try {
-      await setDoc(doc(db, 'posts', newPost.id), newPost);
-    } catch (e) {
-      console.warn('Firestore post sync:', e);
-    }
-
-    return newPost;
+    return { ...post, author: await this.getProfileById(uid) || undefined };
   },
-
   async deletePost(postId: string, userId: string): Promise<void> {
-    const user = store.profiles.find(p => p.id === userId);
-    const post = store.posts.find(p => p.id === postId);
-    if (!post) throw new Error('Post not found');
-
-    if (post.author_id !== userId && !user?.is_moderator && !user?.is_admin) {
-      throw new Error('Unauthorized to delete this post');
-    }
-
-    store.posts = store.posts.filter(p => p.id !== postId);
-    store.comments = store.comments.filter(c => c.post_id !== postId);
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in as the post author to delete it.');
+    const ref = doc(db, 'posts', postId);
+    const snapshot = await getDoc(ref);
+    if (!snapshot.exists()) throw new Error('Post not found in Firestore.');
+    if (snapshot.data().author_id !== userId) throw new Error('Only the post author can delete this post.');
+    await deleteDoc(ref);
+    store.posts = store.posts.filter(post => post.id !== postId);
     store.save();
   },
-
   async toggleLike(postId: string, userId: string): Promise<{ liked: boolean; count: number }> {
-    const post = store.posts.find(p => p.id === postId);
-    if (!post) throw new Error('Post not found');
-
-    post.has_liked = !post.has_liked;
-    post.likes_count = post.has_liked ? post.likes_count + 1 : Math.max(0, post.likes_count - 1);
-
-    if (post.has_liked && post.author_id !== userId) {
-      this.createNotification({
-        recipient_id: post.author_id,
-        actor_id: userId,
-        type: 'post_like',
-        reference_type: 'post',
-        reference_id: postId,
-        message: 'liked your post.',
-      });
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in before liking a post.');
+    const postSnapshot = await getDoc(doc(db, 'posts', postId));
+    if (!postSnapshot.exists()) throw new Error('Post not found.');
+    const likeRecords = await readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', '==', postId));
+    const exists = likeRecords.some(like => like.user_id === userId);
+    const likeId = postId + '_' + userId;
+    let liked: boolean;
+    if (exists) {
+      await deleteDoc(doc(db, 'post_likes', likeId));
+      liked = false;
+    } else {
+      await setDoc(doc(db, 'post_likes', likeId), { post_id: postId, user_id: userId, created_at: new Date().toISOString() });
+      liked = true;
     }
-
+    const allLikes = exists ? likeRecords.filter(like => like.user_id !== userId) : [...likeRecords, { id: likeId, post_id: postId, user_id: userId }];
+    const count = allLikes.length;
+    store.posts = store.posts.map(post => post.id === postId ? { ...post, likes_count: count, has_liked: liked } : post);
     store.save();
-    return { liked: post.has_liked, count: post.likes_count };
+    return { liked, count };
   },
-
-  // Comments
   async getComments(postId: string): Promise<Comment[]> {
-    const list = store.comments
-      .filter(c => c.post_id === postId && c.status === 'published')
-      .map(c => ({
-        ...c,
-        author: store.profiles.find(p => p.id === c.author_id),
-      }));
-
-    return list.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    if (!auth.currentUser) return [];
+    const comments = await readCollection<Comment>('comments', where('post_id', '==', postId), where('status', '==', 'published'));
+    const result = await Promise.all(comments.map(async comment => ({
+      ...comment, author: await this.getProfileById(comment.author_id) || undefined,
+    })));
+    result.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    return result;
   },
-
   async createComment(postId: string, authorId: string, body: string): Promise<Comment> {
-    const post = store.posts.find(p => p.id === postId);
-    if (!post) throw new Error('Post not found');
-
-    const newComment: Comment = {
-      id: 'comm_' + Date.now(),
-      post_id: postId,
-      author_id: authorId,
-      body,
-      status: 'published',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      author: store.profiles.find(p => p.id === authorId),
-    };
-
-    store.comments.push(newComment);
-    post.comments_count = (post.comments_count || 0) + 1;
-
-    if (post.author_id !== authorId) {
-      this.createNotification({
-        recipient_id: post.author_id,
-        actor_id: authorId,
-        type: 'post_comment',
-        reference_type: 'post',
-        reference_id: postId,
-        message: 'commented on your post.',
-      });
+    if (!auth.currentUser || auth.currentUser.uid !== authorId) throw new Error('Sign in before commenting.');
+    const normalizedBody = body.trim();
+    if (!normalizedBody || normalizedBody.length > 4000) throw new Error('Comments must be between 1 and 4000 characters.');
+    const postSnapshot = await getDoc(doc(db, 'posts', postId));
+    if (!postSnapshot.exists()) throw new Error('Post not found.');
+    const now = new Date().toISOString();
+    const id = 'comment_' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+    const comment: Comment = { id, post_id: postId, author_id: authorId, body: normalizedBody, status: 'published', created_at: now, updated_at: now };
+    await setDoc(doc(db, 'comments', id), comment);
+    if (postSnapshot.data().author_id !== authorId) {
+      void this.createNotification({ recipient_id: postSnapshot.data().author_id, actor_id: authorId, type: 'post_comment', reference_type: 'post', reference_id: postId, message: 'commented on your post.' });
     }
-
+    store.comments.push(comment);
     store.save();
-    return newComment;
+    return { ...comment, author: await this.getProfileById(authorId) || undefined };
   },
-
   async deleteComment(commentId: string, userId: string): Promise<void> {
-    const user = store.profiles.find(p => p.id === userId);
-    const comm = store.comments.find(c => c.id === commentId);
-    if (!comm) throw new Error('Comment not found');
-
-    if (comm.author_id !== userId && !user?.is_moderator && !user?.is_admin) {
-      throw new Error('Unauthorized');
-    }
-
-    store.comments = store.comments.filter(c => c.id !== commentId);
-    const post = store.posts.find(p => p.id === comm.post_id);
-    if (post) {
-      post.comments_count = Math.max(0, (post.comments_count || 1) - 1);
-    }
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to delete a comment.');
+    const ref = doc(db, 'comments', commentId);
+    const snapshot = await getDoc(ref);
+    if (!snapshot.exists()) throw new Error('Comment not found.');
+    if (snapshot.data().author_id !== userId) throw new Error('Only the comment author can delete it.');
+    await deleteDoc(ref);
+    store.comments = store.comments.filter(comment => comment.id !== commentId);
     store.save();
   },
-
-  // Friendships & Requests
   async getFriendships(userId: string): Promise<Profile[]> {
-    const friendIds = store.friendships
-      .filter(f => f.user_a === userId || f.user_b === userId)
-      .map(f => (f.user_a === userId ? f.user_b : f.user_a));
-
-    return store.profiles.filter(p => friendIds.includes(p.id) && p.status === 'active');
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to view your friendships.');
+    const [asA, asB] = await Promise.all([
+      readCollection<Friendship>('friendships', where('user_a', '==', userId)),
+      readCollection<Friendship>('friendships', where('user_b', '==', userId)),
+    ]);
+    const friendIds = [...new Set([...asA, ...asB].map(item => item.user_a === userId ? item.user_b : item.user_a))];
+    const friends = await Promise.all(friendIds.map(id => this.getProfileById(id)));
+    return friends.filter((profile): profile is Profile => !!profile && profile.status === 'active');
   },
-
   async getFriendRequests(userId: string): Promise<{ incoming: FriendRequest[]; outgoing: FriendRequest[] }> {
-    const incoming = store.friendRequests
-      .filter(r => r.recipient_id === userId && r.status === 'pending')
-      .map(r => ({ ...r, sender: store.profiles.find(p => p.id === r.sender_id) }));
-
-    const outgoing = store.friendRequests
-      .filter(r => r.sender_id === userId && r.status === 'pending')
-      .map(r => ({ ...r, recipient: store.profiles.find(p => p.id === r.recipient_id) }));
-
-    return { incoming, outgoing };
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to view your friend requests.');
+    const [incomingDocs, outgoingDocs] = await Promise.all([
+      readCollection<FriendRequest>('friend_requests', where('recipient_id', '==', userId)),
+      readCollection<FriendRequest>('friend_requests', where('sender_id', '==', userId)),
+    ]);
+    const incoming = incomingDocs.filter(request => request.status === 'pending');
+    const outgoing = outgoingDocs.filter(request => request.status === 'pending');
+    const hydratedIncoming = await Promise.all(incoming.map(async request => ({ ...request, sender: await this.getProfileById(request.sender_id) || undefined })));
+    const hydratedOutgoing = await Promise.all(outgoing.map(async request => ({ ...request, recipient: await this.getProfileById(request.recipient_id) || undefined })));
+    return { incoming: hydratedIncoming, outgoing: hydratedOutgoing };
   },
-
   async sendFriendRequest(senderId: string, recipientId: string): Promise<FriendRequest> {
-    if (senderId === recipientId) throw new Error('Cannot send friend request to yourself');
-
-    const existing = store.friendRequests.find(
-      r =>
-        ((r.sender_id === senderId && r.recipient_id === recipientId) ||
-          (r.sender_id === recipientId && r.recipient_id === senderId)) &&
-        r.status === 'pending'
-    );
-    if (existing) throw new Error('Friend request already pending');
-
-    const areAlreadyFriends = store.friendships.some(
-      f =>
-        (f.user_a === senderId && f.user_b === recipientId) ||
-        (f.user_a === recipientId && f.user_b === senderId)
-    );
-    if (areAlreadyFriends) throw new Error('Already friends');
-
-    const req: FriendRequest = {
-      id: 'fr_' + Date.now(),
-      sender_id: senderId,
-      recipient_id: recipientId,
-      status: 'pending',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      sender: store.profiles.find(p => p.id === senderId),
-      recipient: store.profiles.find(p => p.id === recipientId),
-    };
-
-    store.friendRequests.push(req);
-
-    this.createNotification({
-      recipient_id: recipientId,
-      actor_id: senderId,
-      type: 'friend_request',
-      reference_type: 'user',
-      reference_id: senderId,
-      message: 'sent you a friend request.',
-    });
-
+    if (!auth.currentUser || auth.currentUser.uid !== senderId) throw new Error('Sign in before sending a friend request.');
+    if (senderId === recipientId) throw new Error('Cannot send a friend request to yourself.');
+    const recipient = await this.getProfileById(recipientId);
+    if (!recipient || recipient.status !== 'active') throw new Error('This member is unavailable.');
+    const ownBlocks = await this.getBlocks(senderId);
+    if (ownBlocks.some(block => block.blocked_id === recipientId)) throw new Error('You have blocked this member.');
+    const [outgoingDocs, incomingDocs, friendships] = await Promise.all([
+      readCollection<FriendRequest>('friend_requests', where('sender_id', '==', senderId)),
+      readCollection<FriendRequest>('friend_requests', where('recipient_id', '==', senderId)),
+      this.getFriendships(senderId),
+    ]);
+    const pending = [...outgoingDocs, ...incomingDocs].some(request => request.status === 'pending' &&
+      ((request.sender_id === senderId && request.recipient_id === recipientId) ||
+       (request.sender_id === recipientId && request.recipient_id === senderId)));
+    if (pending) throw new Error('A friend request is already pending.');
+    if (friendships.some(profile => profile.id === recipientId)) throw new Error('You are already friends.');
+    const id = 'fr_' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+    const now = new Date().toISOString();
+    const request: FriendRequest = { id, sender_id: senderId, recipient_id: recipientId, status: 'pending', created_at: now, updated_at: now };
+    await setDoc(doc(db, 'friend_requests', id), request);
+    void this.createNotification({ recipient_id: recipientId, actor_id: senderId, type: 'friend_request', reference_type: 'user', reference_id: senderId, message: 'sent you a friend request.' });
+    store.friendRequests.push(request);
     store.save();
-    return req;
+    return { ...request, sender: await this.getProfileById(senderId) || undefined, recipient };
   },
-
   async acceptFriendRequest(requestId: string, currentUserId: string): Promise<void> {
-    const req = store.friendRequests.find(r => r.id === requestId);
-    if (!req) throw new Error('Request not found');
-    if (req.recipient_id !== currentUserId) throw new Error('Unauthorized');
-
-    req.status = 'accepted';
-    req.updated_at = new Date().toISOString();
-
-    const uA = req.sender_id < req.recipient_id ? req.sender_id : req.recipient_id;
-    const uB = req.sender_id < req.recipient_id ? req.recipient_id : req.sender_id;
-
-    store.friendships.push({
-      id: 'fs_' + Date.now(),
-      user_a: uA,
-      user_b: uB,
-      created_at: new Date().toISOString(),
-    });
-
-    this.createNotification({
-      recipient_id: req.sender_id,
-      actor_id: currentUserId,
-      type: 'friend_accepted',
-      reference_type: 'user',
-      reference_id: currentUserId,
-      message: 'accepted your friend request.',
-    });
-
+    if (!auth.currentUser || auth.currentUser.uid !== currentUserId) throw new Error('Sign in before accepting a friend request.');
+    const requestRef = doc(db, 'friend_requests', requestId);
+    const requestSnapshot = await getDoc(requestRef);
+    if (!requestSnapshot.exists()) throw new Error('Friend request not found.');
+    const request = { ...requestSnapshot.data(), id: requestSnapshot.id } as FriendRequest;
+    if (request.recipient_id !== currentUserId || request.status !== 'pending') throw new Error('This request cannot be accepted.');
+    const now = new Date().toISOString();
+    await updateDoc(requestRef, { status: 'accepted', updated_at: now });
+    const userA = request.sender_id < request.recipient_id ? request.sender_id : request.recipient_id;
+    const userB = request.sender_id < request.recipient_id ? request.recipient_id : request.sender_id;
+    const friendship: Friendship = { id: userA + '_' + userB, user_a: userA, user_b: userB, request_id: requestId, created_at: now };
+    await setDoc(doc(db, 'friendships', friendship.id), friendship, { merge: true });
+    void this.createNotification({ recipient_id: request.sender_id, actor_id: currentUserId, type: 'friend_accepted', reference_type: 'user', reference_id: currentUserId, message: 'accepted your friend request.' });
+    store.friendRequests = store.friendRequests.map(item => item.id === requestId ? { ...item, status: 'accepted', updated_at: now } : item);
+    store.friendships = store.friendships.filter(item => item.id !== friendship.id).concat(friendship);
     store.save();
   },
-
   async declineFriendRequest(requestId: string): Promise<void> {
-    const req = store.friendRequests.find(r => r.id === requestId);
-    if (req) {
-      req.status = 'rejected';
-      store.save();
-    }
-  },
-
-  async removeFriendship(userA: string, userB: string): Promise<void> {
-    store.friendships = store.friendships.filter(
-      f => !(
-        (f.user_a === userA && f.user_b === userB) ||
-        (f.user_a === userB && f.user_b === userA)
-      )
-    );
+    if (!auth.currentUser) throw new Error('Sign in before declining a friend request.');
+    const requestRef = doc(db, 'friend_requests', requestId);
+    const snapshot = await getDoc(requestRef);
+    if (!snapshot.exists()) return;
+    const request = snapshot.data() as FriendRequest;
+    if (request.recipient_id !== auth.currentUser.uid || request.status !== 'pending') throw new Error('You cannot decline this request.');
+    const now = new Date().toISOString();
+    await updateDoc(requestRef, { status: 'rejected', updated_at: now });
+    store.friendRequests = store.friendRequests.map(item => item.id === requestId ? { ...item, status: 'rejected', updated_at: now } : item);
     store.save();
   },
-
-  // Messaging & Conversations
-  async getConversations(userId: string): Promise<Conversation[]> {
-    const userConvs = store.conversations.filter(c =>
-      c.members.some(m => m.id === userId)
-    );
-
-    return userConvs.map(conv => {
-      const msgs = store.messages.filter(m => m.conversation_id === conv.id);
-      const lastMsg = msgs[msgs.length - 1];
-      return {
-        ...conv,
-        last_message: lastMsg,
-      };
-    }).sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+  async removeFriendship(userA: string, userB: string): Promise<void> {
+    if (!auth.currentUser || (auth.currentUser.uid !== userA && auth.currentUser.uid !== userB)) throw new Error('You can only remove your own friendship.');
+    const [asA, asB] = await Promise.all([
+      readCollection<Friendship>('friendships', where('user_a', '==', userA)),
+      readCollection<Friendship>('friendships', where('user_b', '==', userA)),
+    ]);
+    const matches = [...asA, ...asB].filter(item =>
+      (item.user_a === userA && item.user_b === userB) || (item.user_a === userB && item.user_b === userA));
+    await Promise.all(matches.map(item => deleteDoc(doc(db, 'friendships', item.id))));
+    store.friendships = store.friendships.filter(item => !((item.user_a === userA && item.user_b === userB) || (item.user_a === userB && item.user_b === userA)));
+    store.save();
   },
-
+  async getConversations(userId: string): Promise<Conversation[]> {
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to view messages.');
+    const records = await readCollection<any>('conversations', where('member_ids', 'array-contains', userId));
+    const conversations = await Promise.all(records.map(async record => {
+      const ids: string[] = Array.isArray(record.member_ids) ? record.member_ids : [];
+      const members = await Promise.all(ids.map(async (id: string) => await this.getProfileById(id)));
+      return { ...record, members: members.filter((profile): profile is Profile => !!profile) } as Conversation;
+    }));
+    store.conversations = conversations;
+    store.save();
+    return conversations.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+  },
   async getConversationById(convId: string): Promise<Conversation | null> {
-    const conv = store.conversations.find(c => c.id === convId);
-    if (!conv) return null;
+    if (!auth.currentUser) throw new Error('Sign in to open a conversation.');
+    const snapshot = await getDoc(doc(db, 'conversations', convId));
+    if (!snapshot.exists()) return null;
+    const record = snapshot.data();
+    if (!Array.isArray(record.member_ids) || !record.member_ids.includes(auth.currentUser.uid)) throw new Error('You are not a member of this conversation.');
+    const ids = record.member_ids as string[];
+    const members = await Promise.all(ids.map(async id => await this.getProfileById(id)));
+    return { ...record, id: snapshot.id, members: members.filter((profile): profile is Profile => !!profile) } as Conversation;
+  },
+  async getMessages(convId: string): Promise<Message[]> {
+    const conversation = await this.getConversationById(convId);
+    if (!conversation) return [];
+    const records = await readCollection<Message>('messages', where('conversation_id', '==', convId));
+    const messages = await Promise.all(records.map(async message => ({ ...message, sender: await this.getProfileById(message.sender_id) || undefined })));
+    messages.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    store.messages = store.messages.filter(message => message.conversation_id !== convId).concat(messages);
+    store.save();
+    return messages;
+  },
+  async sendMessage(convId: string, senderId: string, body: string): Promise<Message> {
+    if (!auth.currentUser || auth.currentUser.uid !== senderId) throw new Error('Sign in before sending a message.');
+    const conversation = await this.getConversationById(convId);
+    if (!conversation || !conversation.members.some(member => member.id === senderId)) throw new Error('You are not a member of this conversation.');
+    const normalized = body.trim();
+    if (!normalized || normalized.length > 5000) throw new Error('Messages must be between 1 and 5000 characters.');
+    const id = 'msg_' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+    const now = new Date().toISOString();
+    const message: Message = { id, conversation_id: convId, sender_id: senderId, body: normalized, created_at: now, status: 'sent' };
+    await setDoc(doc(db, 'messages', id), message);
+    const convRef = doc(db, 'conversations', convId);
+    await updateDoc(convRef, { updated_at: now, last_message: { id, conversation_id: convId, sender_id: senderId, body: normalized, created_at: now, status: 'sent' } });
+    for (const member of conversation.members) {
+      if (member.id !== senderId) {
+        void this.createNotification({ recipient_id: member.id, actor_id: senderId, type: 'message', reference_type: 'conversation', reference_id: convId, message: 'sent you a message.' });
+      }
+    }
+    store.messages.push(message);
+    store.conversations = store.conversations.map(item => item.id === convId ? { ...item, updated_at: now, last_message: message } : item);
+    store.save();
+    return { ...message, sender: await this.getProfileById(senderId) || undefined };
+  },
+  async startOrGetDirectConversation(user1Id: string, user2Id: string): Promise<Conversation> {
+    if (!auth.currentUser || auth.currentUser.uid !== user1Id) throw new Error('Sign in as yourself to start a conversation.');
+    if (user1Id === user2Id) throw new Error('You cannot message yourself.');
+    const existing = await readCollection<any>('conversations', where('member_ids', 'array-contains', user1Id));
+    const found = existing.find(conv => Array.isArray(conv.member_ids) && conv.member_ids.length === 2 && conv.member_ids.includes(user2Id));
+    if (found) return this.getConversationById(found.id) as Promise<Conversation>;
+    const [first, second] = await Promise.all([this.getProfileById(user1Id), this.getProfileById(user2Id)]);
+    if (!first || !second) throw new Error('Both profiles must exist before messaging.');
+    const ids = [user1Id, user2Id].sort();
+    const id = 'dm_' + ids[0] + '_' + ids[1];
+    const now = new Date().toISOString();
+    const payload = { id, member_ids: ids, created_at: now, updated_at: now };
+    await setDoc(doc(db, 'conversations', id), payload, { merge: true });
+    const conv = { ...payload, members: [first, second], unread_count: 0 } as Conversation;
+    store.conversations = store.conversations.filter(item => item.id !== id).concat(conv);
+    store.save();
     return conv;
   },
-
-  async getMessages(convId: string): Promise<Message[]> {
-    const list = store.messages.filter(m => m.conversation_id === convId);
-    return list.map(m => ({
-      ...m,
-      sender: store.profiles.find(p => p.id === m.sender_id),
-    }));
-  },
-
-  async sendMessage(convId: string, senderId: string, body: string): Promise<Message> {
-    const conv = store.conversations.find(c => c.id === convId);
-    if (!conv) throw new Error('Conversation not found');
-
-    const newMsg: Message = {
-      id: 'msg_' + Date.now(),
-      conversation_id: convId,
-      sender_id: senderId,
-      body,
-      created_at: new Date().toISOString(),
-      status: 'sent',
-      sender: store.profiles.find(p => p.id === senderId),
-    };
-
-    store.messages.push(newMsg);
-    conv.updated_at = new Date().toISOString();
-    conv.last_message = newMsg;
-
-    // Notify other members
-    conv.members.forEach(m => {
-      if (m.id !== senderId) {
-        this.createNotification({
-          recipient_id: m.id,
-          actor_id: senderId,
-          type: 'message',
-          reference_type: 'conversation',
-          reference_id: convId,
-          message: 'sent you a message.',
-        });
-      }
-    });
-
-    store.save();
-    return newMsg;
-  },
-
-  async startOrGetDirectConversation(user1Id: string, user2Id: string): Promise<Conversation> {
-    // Check if an existing 2-member conversation exists
-    const existing = store.conversations.find(c => {
-      const ids = c.members.map(m => m.id);
-      return ids.length === 2 && ids.includes(user1Id) && ids.includes(user2Id);
-    });
-
-    if (existing) return existing;
-
-    const p1 = store.profiles.find(p => p.id === user1Id);
-    const p2 = store.profiles.find(p => p.id === user2Id);
-    if (!p1 || !p2) throw new Error('Profile not found');
-
-    const newConv: Conversation = {
-      id: 'conv_' + Date.now(),
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      members: [p1, p2],
-      unread_count: 0,
-    };
-
-    store.conversations.unshift(newConv);
-    store.save();
-    return newConv;
-  },
-
-  // Notifications
   async getNotifications(userId: string): Promise<Notification[]> {
-    const list = store.notifications
-      .filter(n => n.recipient_id === userId)
-      .map(n => ({
-        ...n,
-        actor: store.profiles.find(p => p.id === n.actor_id),
-      }));
-
-    return list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to view your notifications.');
+    const records = await readCollection<Notification>('notifications', where('recipient_id', '==', userId));
+    records.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    const result = await Promise.all(records.map(async item => ({ ...item, actor: await this.getProfileById(item.actor_id) || undefined })));
+    store.notifications = result;
+    store.save();
+    return result;
   },
-
   createNotification(notif: Omit<Notification, 'id' | 'created_at' | 'read_at'>): void {
-    const newNotif: Notification = {
+    const uid = auth.currentUser?.uid;
+    if (!uid || notif.actor_id !== uid) {
+      console.warn('Skipped notification because actor_id did not match the signed-in Firebase user.');
+      return;
+    }
+    const notification: Notification = {
       ...notif,
-      id: 'notif_' + Date.now() + Math.random().toString(36).substring(2, 6),
+      id: 'notif_' + crypto.randomUUID().replace(/-/g, '').slice(0, 18),
       read_at: null,
       created_at: new Date().toISOString(),
     };
-    store.notifications.unshift(newNotif);
-    store.save();
+    void setDoc(doc(db, 'notifications', notification.id), cleanFirestoreData(notification))
+      .then(() => {
+        store.notifications.unshift(notification);
+        store.save();
+      })
+      .catch(error => console.error('Could not save Firestore notification:', firestoreErrorMessage(error)));
   },
-
   async markNotificationRead(notifId: string): Promise<void> {
-    const notif = store.notifications.find(n => n.id === notifId);
-    if (notif) {
-      notif.read_at = new Date().toISOString();
-      store.save();
-    }
+    if (!auth.currentUser) throw new Error('Sign in to update notifications.');
+    const ref = doc(db, 'notifications', notifId);
+    const snapshot = await getDoc(ref);
+    if (!snapshot.exists() || snapshot.data().recipient_id !== auth.currentUser.uid) throw new Error('Notification not found or not yours.');
+    const readAt = new Date().toISOString();
+    await updateDoc(ref, { read_at: readAt });
+    store.notifications = store.notifications.map(item => item.id === notifId ? { ...item, read_at: readAt } : item);
+    store.save();
   },
-
   async markAllNotificationsRead(userId: string): Promise<void> {
-    store.notifications.forEach(n => {
-      if (n.recipient_id === userId && !n.read_at) {
-        n.read_at = new Date().toISOString();
-      }
-    });
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to update your notifications.');
+    const notifications = await readCollection<Notification>('notifications', where('recipient_id', '==', userId));
+    await Promise.all(notifications.filter(item => !item.read_at).map(item => updateDoc(doc(db, 'notifications', item.id), { read_at: new Date().toISOString() })));
+    const now = new Date().toISOString();
+    store.notifications = notifications.map(item => ({ ...item, read_at: item.read_at || now }));
     store.save();
   },
-
-  // Safety, Blocks & Reports
   async getBlocks(userId: string): Promise<Block[]> {
-    return store.blocks
-      .filter(b => b.blocker_id === userId)
-      .map(b => ({
-        ...b,
-        blocked_profile: store.profiles.find(p => p.id === b.blocked_id),
-      }));
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to view your block list.');
+    const records = await readCollection<Block>('blocks', where('blocker_id', '==', userId));
+    const result = await Promise.all(records.map(async block => ({ ...block, blocked_profile: await this.getProfileById(block.blocked_id) || undefined })));
+    store.blocks = result;
+    store.save();
+    return result;
   },
-
   async blockUser(blockerId: string, blockedId: string): Promise<void> {
-    if (blockerId === blockedId) throw new Error('Cannot block yourself');
-
-    const already = store.blocks.some(b => b.blocker_id === blockerId && b.blocked_id === blockedId);
-    if (!already) {
-      store.blocks.push({
-        blocker_id: blockerId,
-        blocked_id: blockedId,
-        created_at: new Date().toISOString(),
-      });
-      // Also remove friendships
-      this.removeFriendship(blockerId, blockedId);
-      store.save();
-    }
+    if (!auth.currentUser || auth.currentUser.uid !== blockerId) throw new Error('Sign in to block a member.');
+    if (blockerId === blockedId) throw new Error('You cannot block yourself.');
+    const id = blockerId + '_' + blockedId;
+    await setDoc(doc(db, 'blocks', id), { blocker_id: blockerId, blocked_id: blockedId, created_at: new Date().toISOString() }, { merge: true });
+    // Remove any existing friendship using the deterministic Firestore document ID.
+    await this.removeFriendship(blockerId, blockedId).catch(() => undefined);
+    store.blocks = store.blocks.filter(block => !(block.blocker_id === blockerId && block.blocked_id === blockedId)).concat({ blocker_id: blockerId, blocked_id: blockedId, created_at: new Date().toISOString() });
+    store.save();
   },
-
   async unblockUser(blockerId: string, blockedId: string): Promise<void> {
-    store.blocks = store.blocks.filter(b => !(b.blocker_id === blockerId && b.blocked_id === blockedId));
+    if (!auth.currentUser || auth.currentUser.uid !== blockerId) throw new Error('Sign in to unblock a member.');
+    await deleteDoc(doc(db, 'blocks', blockerId + '_' + blockedId));
+    store.blocks = store.blocks.filter(block => !(block.blocker_id === blockerId && block.blocked_id === blockedId));
     store.save();
   },
-
   async createReport(data: {
-    reporter_id: string;
-    target_type: ReportTargetType;
-    target_id: string;
-    reason: ReportReason;
-    details?: string;
+    reporter_id: string; target_type: ReportTargetType; target_id: string;
+    reason: ReportReason; details?: string;
   }): Promise<Report> {
-    const newReport: Report = {
-      id: 'rep_' + Date.now(),
-      reporter_id: data.reporter_id,
-      target_type: data.target_type,
-      target_id: data.target_id,
-      reason: data.reason,
-      details: data.details || null,
-      status: 'pending',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      reporter: store.profiles.find(p => p.id === data.reporter_id),
-      target_summary: `${data.target_type} #${data.target_id}`,
+    if (!auth.currentUser || auth.currentUser.uid !== data.reporter_id) throw new Error('Sign in before reporting content.');
+    const now = new Date().toISOString();
+    const report: Report = {
+      id: 'rep_' + crypto.randomUUID().replace(/-/g, '').slice(0, 18),
+      reporter_id: data.reporter_id, target_type: data.target_type, target_id: data.target_id,
+      reason: data.reason, details: data.details || null, status: 'pending',
+      created_at: now, updated_at: now, target_summary: data.target_type + ' #' + data.target_id,
     };
-
-    store.reports.unshift(newReport);
+    await setDoc(doc(db, 'reports', report.id), cleanFirestoreData(report));
+    store.reports.unshift(report);
     store.save();
-    return newReport;
+    return { ...report, reporter: await this.getProfileById(data.reporter_id) || undefined };
   },
-
   async getReports(): Promise<Report[]> {
-    return store.reports.map(r => ({
-      ...r,
-      reporter: store.profiles.find(p => p.id === r.reporter_id),
-    }));
+    if (!auth.currentUser) throw new Error('Sign in to view reports.');
+    const reports = await readCollection<Report>('reports');
+    const result = await Promise.all(reports.map(async report => ({ ...report, reporter: await this.getProfileById(report.reporter_id) || undefined })));
+    result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    store.reports = result;
+    store.save();
+    return result;
   },
-
   async updateReportStatus(reportId: string, status: Report['status']): Promise<void> {
-    const rep = store.reports.find(r => r.id === reportId);
-    if (rep) {
-      rep.status = status;
-      rep.updated_at = new Date().toISOString();
-      store.save();
-    }
+    if (!auth.currentUser) throw new Error('Sign in before updating a report.');
+    const ref = doc(db, 'reports', reportId);
+    const snapshot = await getDoc(ref);
+    if (!snapshot.exists()) throw new Error('Report not found.');
+    const update = { status, updated_at: new Date().toISOString() };
+    await updateDoc(ref, update);
+    store.reports = store.reports.map(report => report.id === reportId ? { ...report, ...update } : report);
+    store.save();
   },
-
   async getModerationActions(): Promise<ModerationAction[]> {
-    return store.moderationActions.map(ma => ({
-      ...ma,
-      moderator: store.profiles.find(p => p.id === ma.moderator_id),
-    })).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    if (!auth.currentUser) throw new Error('Sign in to view moderation history.');
+    const records = await readCollection<ModerationAction>('moderation_actions');
+    const result = await Promise.all(records.map(async action => ({ ...action, moderator: await this.getProfileById(action.moderator_id) || undefined })));
+    result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    store.moderationActions = result;
+    store.save();
+    return result;
   },
-
   async executeModerationAction(data: {
-    moderator_id: string;
-    target_type: string;
-    target_id: string;
-    action_type: ModerationActionType;
-    reason: string;
-    report_id?: string;
+    moderator_id: string; target_type: string; target_id: string;
+    action_type: ModerationActionType; reason: string; report_id?: string;
   }): Promise<ModerationAction> {
+    if (!auth.currentUser || auth.currentUser.uid !== data.moderator_id) throw new Error('Sign in before performing moderation.');
+    // Privileged effects must run in a trusted Cloud Function; client booleans are not sufficient authority.
+    const token = await auth.currentUser.getIdTokenResult(true);
+    if (token.claims.moderator !== true && token.claims.admin !== true) throw new Error('This account does not have a trusted Firebase moderator/admin claim.');
     const action: ModerationAction = {
-      id: 'mact_' + Date.now(),
-      moderator_id: data.moderator_id,
-      target_type: data.target_type,
-      target_id: data.target_id,
-      action_type: data.action_type,
-      reason: data.reason,
-      created_at: new Date().toISOString(),
-      moderator: store.profiles.find(p => p.id === data.moderator_id),
-    };
-
+      id: 'mact_' + crypto.randomUUID().replace(/-/g, '').slice(0, 18),
+      moderator_id: data.moderator_id, target_type: data.target_type, target_id: data.target_id,
+      action_type: data.action_type, reason: data.reason, created_at: new Date().toISOString(),
+      report_id: data.report_id,
+    } as ModerationAction;
+    await setDoc(doc(db, 'moderation_actions', action.id), cleanFirestoreData(action));
+    if (data.report_id) await this.updateReportStatus(data.report_id, 'resolved');
     store.moderationActions.unshift(action);
-
-    // Apply consequence
-    if (data.action_type === 'remove_content') {
-      if (data.target_type === 'post') {
-        const post = store.posts.find(p => p.id === data.target_id);
-        if (post) post.status = 'removed_by_mod';
-      } else if (data.target_type === 'comment') {
-        const comm = store.comments.find(c => c.id === data.target_id);
-        if (comm) comm.status = 'removed_by_mod';
-      }
-    } else if (data.action_type === 'suspend_user') {
-      const user = store.profiles.find(p => p.id === data.target_id);
-      if (user) user.status = 'suspended';
-    }
-
-    if (data.report_id) {
-      await this.updateReportStatus(data.report_id, 'resolved');
-    }
-
     store.save();
     return action;
   },
-
-  // Account Data Export & Deletion
   async exportUserData(userId: string): Promise<string> {
-    const profile = await this.getProfileById(userId);
-    const priv = await this.getUserPrivate(userId);
-    const posts = store.posts.filter(p => p.author_id === userId);
-    const comments = store.comments.filter(c => c.author_id === userId);
-    const friendships = await this.getFriendships(userId);
-
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('You can export only your own account data.');
+    const [profile, priv, posts, comments, friendships] = await Promise.all([
+      this.getProfileById(userId),
+      this.getUserPrivate(userId),
+      readCollection<Post>('posts', where('author_id', '==', userId)),
+      readCollection<Comment>('comments', where('author_id', '==', userId)),
+      this.getFriendships(userId),
+    ]);
     const payload = {
       export_date: new Date().toISOString(),
       platform: 'BiCircle',
       profile,
       privacy_and_settings: priv,
-      posts,
-      comments,
+      posts: posts.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+      comments: comments.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
       friends_count: friendships.length,
-      friends: friendships.map(f => ({ username: f.username, display_name: f.display_name })),
+      friends: friendships.map(friend => ({ username: friend.username, display_name: friend.display_name })),
     };
-
     return JSON.stringify(payload, null, 2);
   },
-
   async deactivateUser(userId: string): Promise<void> {
-    const profile = store.profiles.find(p => p.id === userId);
-    if (profile) {
-      profile.status = 'deactivated';
-      store.save();
-    }
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('You can deactivate only your own account.');
+    const snapshot = await getDoc(doc(db, 'profiles', userId));
+    if (!snapshot.exists()) throw new Error('Profile not found.');
+    // Account deactivation status changes should be made by a trusted backend, not a client-writable role field.
+    throw new Error('Account deactivation requires the trusted account-management Cloud Function.');
   },
 };

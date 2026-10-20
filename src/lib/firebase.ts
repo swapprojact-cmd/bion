@@ -35,14 +35,14 @@ export const storage = getStorage(app);
 export async function validateFirestoreConnection(): Promise<boolean> {
   try {
     const { doc, getDocFromServer } = await import('firebase/firestore');
+    // firestore.rules explicitly permits reads to health_checks, so a denied read is not misreported as success.
     await getDocFromServer(doc(db, 'health_checks', 'client'));
     return true;
   } catch (error) {
-    const message = error instanceof Error ? error.message.toLowerCase() : '';
-    if (message.includes('offline') || message.includes('network')) {
-      console.warn('Firestore is unreachable; check project configuration and network.');
-      return false;
-    }
-    return true;
+    const code = error && typeof error === 'object' && 'code' in error
+      ? String((error as { code?: unknown }).code || '')
+      : '';
+    console.error('Firestore connection check failed:', code || error);
+    return false;
   }
 }

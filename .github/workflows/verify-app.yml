@@ -25,3 +25,10 @@ jobs:
         run: npm run lint
       - name: Build production frontend
         run: npm run build
+      - name: Set up Java for Firebase emulators
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Validate Firestore and Storage rules with emulators
+        run: npx --yes firebase-tools@latest emulators:exec --only firestore,storage --project demo-bicircle "node -e \"console.log('Firebase rules parsed and emulators are reachable')\""
