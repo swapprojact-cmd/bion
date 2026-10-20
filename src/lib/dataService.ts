@@ -498,46 +498,92 @@ export const DataService = {
     sort?: 'latest' | 'popular';
     authorId?: string;
   }): Promise<Post[]> {
-    const { currentUserId, groupId, sort = 'latest', authorId } = options || {};
+    const uid = auth.currentUser?.uid || null;
+    const requestedUid = options?.currentUserId;
+    if (requestedUid && requestedUid !== uid) throw new Error('The requested feed user does not match the signed-in account.');
+    const constraints = [where('status', '==', 'published')];
+    const loads: Promise<Post[]>[] = [];
+    if (options?.groupId) {
+      const membership = uid ? await getDoc(doc(db, 'group_members', options.groupId + '_' + uid)) : null;
+      if (!uid || !membership?.exists()) return [];
+      loads.push(readCollection<Post>('posts', ...constraints, where('group_id', '==', options.groupId)));
+    } else if (options?.authorId) {
+      if (!uid || (options.authorId !== uid && !uid)) return [];
+      loads.push(readCollection<Post>('posts', ...constraints, where('author_id', '==', options.authorId)));
+    } else {
+      loads.push(readCollection<Post>('posts', ...constraints, where('visibility', '==', 'public')));
+      if (uid) {
+        loads.push(readCollection<Post>('posts', ...constraints, where('author_id', '==', uid)));
+        const friends = await this.getFriendships(uid);
+        for (const friend of friends) {
+          loads.push(readCollection<Post>('posts', ...constraints, where('author_id', '==', friend.id), where('visibility', '==', 'friends_only')));
+        }
+        const memberships = await readCollection<GroupMember>('group_members', where('user_id', '==', uid), where('membership_status', '==', 'active'));
+        const groupIds = [...new Set(memberships.map(member => member.group_id))];
+        for (const groupId of groupIds) {
+          loads.push(readCollection<Post>('posts', ...constraints, where('group_id', '==', groupId), where('visibility', '==', 'group_only')));
+        }
+      }
+    }
+    const batches = await Promise.all(loads);
+    const unique = [...new Map(batches.flat().map(post => [post.id, post])).values()];
+    const blocked = uid ? new Set((await this.getBlocks(uid)).map(block => block.blocked_id)) : new Set<string>();
+    let visible = unique.filter(post => !blocked.has(post.author_id));
+    if (options?.authorId) visible = visible.filter(post => post.author_id === options.authorId);
+    if (options?.sort === 'popular') visible.sort((a, b) => (b.likes_count || 0) - (a.likes_count || 0));
+    else visible.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-    let posts = [...store.posts].filter(p => p.status === 'published');
+    // Hydrate using real Firestore records. Like/comment counts are calculated from persisted documents.
+    const authorIds = [...new Set(visible.map(post => post.author_id))];
+    const authors = new Map<string, Profile>();
+    await Promise.all(authorIds.map(async id => {
+      const author = await this.getProfileById(id);
+      if (author) authors.set(id, author);
+    }));
+    const groupIds = [...new Set(visible.map(post => post.group_id).filter((id): id is string => !!id))];
+    const groups = new Map<string, Group>();
+    await Promise.all(groupIds.map(async id => {
+      const group = await this.getGroupById(id, uid || undefined);
+      if (group) groups.set(id, group);
+    }));
 
-    // Filter by group if specified
-    if (groupId) {
-      posts = posts.filter(p => p.group_id === groupId);
+    if (uid && visible.length) {
+      const postIds = visible.map(post => post.id);
+      const likesByPost = new Map<string, number>();
+      const likedByMe = new Set<string>();
+      const commentsByPost = new Map<string, number>();
+      for (let offset = 0; offset < postIds.length; offset += 30) {
+        const ids = postIds.slice(offset, offset + 30);
+        const [likes, comments] = await Promise.all([
+          readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', 'in', ids)),
+          readCollection<Comment>('comments', where('post_id', 'in', ids), where('status', '==', 'published')),
+        ]);
+        for (const like of likes) {
+          likesByPost.set(like.post_id, (likesByPost.get(like.post_id) || 0) + 1);
+          if (like.user_id === uid) likedByMe.add(like.post_id);
+        }
+        for (const comment of comments) commentsByPost.set(comment.post_id, (commentsByPost.get(comment.post_id) || 0) + 1);
+      }
+      visible = visible.map(post => ({
+        ...post,
+        author: authors.get(post.author_id),
+        group: post.group_id ? groups.get(post.group_id) : undefined,
+        likes_count: likesByPost.get(post.id) ?? 0,
+        has_liked: likedByMe.has(post.id),
+        comments_count: commentsByPost.get(post.id) ?? 0,
+      }));
+    } else {
+      visible = visible.map(post => ({
+        ...post,
+        author: authors.get(post.author_id),
+        group: post.group_id ? groups.get(post.group_id) : undefined,
+      }));
     }
 
-    // Filter by author if specified
-    if (authorId) {
-      posts = posts.filter(p => p.author_id === authorId);
-    }
-
-    // Check blocked users
-    if (currentUserId) {
-      const blockedIds = store.blocks
-        .filter(b => b.blocker_id === currentUserId || b.blocked_id === currentUserId)
-        .map(b => (b.blocker_id === currentUserId ? b.blocked_id : b.blocker_id));
-
-      posts = posts.filter(p => !blockedIds.includes(p.author_id));
-    }
-
-    // Attach authors and groups
-    const populated = posts.map(p => {
-      const author = store.profiles.find(pr => pr.id === p.author_id);
-      const group = p.group_id ? store.groups.find(g => g.id === p.group_id) : undefined;
-      return {
-        ...p,
-        author,
-        group,
-      };
-    });
-
-    if (sort === 'popular') {
-      return populated.sort((a, b) => b.likes_count - a.likes_count);
-    }
-    return populated.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    store.posts = visible;
+    store.save();
+    return visible;
   },
-
   async createPost(data: {
     author_id: string;
     body: string;
@@ -551,140 +597,99 @@ export const DataService = {
     location_lat?: number;
     location_lng?: number;
   }): Promise<Post> {
-    const newPost: Post = {
-      id: 'post_' + Date.now(),
-      author_id: data.author_id,
-      group_id: data.group_id || null,
-      body: data.body,
-      media_paths: data.media_paths || [],
-      video_url: data.video_url || undefined,
+    const uid = auth.currentUser?.uid;
+    if (!uid || uid !== data.author_id) throw new Error('Sign in before creating a post.');
+    const groupId = data.group_id || null;
+    const visibility = (data.visibility as Post['visibility']) || (groupId ? 'group_only' : 'public');
+    if (groupId && visibility === 'group_only') {
+      const membership = await getDoc(doc(db, 'group_members', groupId + '_' + uid));
+      if (!membership.exists() || membership.data().membership_status !== 'active') {
+        throw new Error('Join the circle before posting to it.');
+      }
+    }
+    const id = 'post_' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+    const now = new Date().toISOString();
+    const post: Post = {
+      id, author_id: uid, group_id: groupId, body: data.body.trim(),
+      media_paths: data.media_paths || [], video_url: data.video_url || undefined,
       media_type: data.media_type || (data.video_url ? 'video' : data.media_paths?.length ? 'photo' : undefined),
-      is_18_plus: !!data.is_18_plus,
-      location_name: data.location_name,
-      location_lat: data.location_lat,
-      location_lng: data.location_lng,
-      visibility: (data.visibility as any) || (data.group_id ? 'group_only' : 'public'),
-      status: 'published',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      likes_count: 0,
-      comments_count: 0,
-      has_liked: false,
-      author: store.profiles.find(p => p.id === data.author_id),
-      group: data.group_id ? store.groups.find(g => g.id === data.group_id) : undefined,
+      is_18_plus: !!data.is_18_plus, location_name: data.location_name,
+      location_lat: data.location_lat, location_lng: data.location_lng,
+      visibility, status: 'published', created_at: now, updated_at: now,
+      likes_count: 0, comments_count: 0, has_liked: false,
     };
-
-    store.posts.unshift(newPost);
+    const { author: _author, group: _group, has_liked: _liked, ...payload } = post;
+    await setDoc(doc(db, 'posts', id), payload);
+    store.posts.unshift(post);
     store.save();
-
-    try {
-      await setDoc(doc(db, 'posts', newPost.id), newPost);
-    } catch (e) {
-      console.warn('Firestore post sync:', e);
-    }
-
-    return newPost;
+    return { ...post, author: await this.getProfileById(uid) || undefined };
   },
-
   async deletePost(postId: string, userId: string): Promise<void> {
-    const user = store.profiles.find(p => p.id === userId);
-    const post = store.posts.find(p => p.id === postId);
-    if (!post) throw new Error('Post not found');
-
-    if (post.author_id !== userId && !user?.is_moderator && !user?.is_admin) {
-      throw new Error('Unauthorized to delete this post');
-    }
-
-    store.posts = store.posts.filter(p => p.id !== postId);
-    store.comments = store.comments.filter(c => c.post_id !== postId);
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in as the post author to delete it.');
+    const ref = doc(db, 'posts', postId);
+    const snapshot = await getDoc(ref);
+    if (!snapshot.exists()) throw new Error('Post not found in Firestore.');
+    if (snapshot.data().author_id !== userId) throw new Error('Only the post author can delete this post.');
+    await deleteDoc(ref);
+    store.posts = store.posts.filter(post => post.id !== postId);
     store.save();
   },
-
   async toggleLike(postId: string, userId: string): Promise<{ liked: boolean; count: number }> {
-    const post = store.posts.find(p => p.id === postId);
-    if (!post) throw new Error('Post not found');
-
-    post.has_liked = !post.has_liked;
-    post.likes_count = post.has_liked ? post.likes_count + 1 : Math.max(0, post.likes_count - 1);
-
-    if (post.has_liked && post.author_id !== userId) {
-      this.createNotification({
-        recipient_id: post.author_id,
-        actor_id: userId,
-        type: 'post_like',
-        reference_type: 'post',
-        reference_id: postId,
-        message: 'liked your post.',
-      });
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in before liking a post.');
+    const postSnapshot = await getDoc(doc(db, 'posts', postId));
+    if (!postSnapshot.exists()) throw new Error('Post not found.');
+    const likeRef = doc(db, 'post_likes', postId + '_' + userId);
+    const likeSnapshot = await getDoc(likeRef);
+    let liked: boolean;
+    if (likeSnapshot.exists()) {
+      await deleteDoc(likeRef);
+      liked = false;
+    } else {
+      await setDoc(likeRef, { post_id: postId, user_id: userId, created_at: new Date().toISOString() });
+      liked = true;
     }
-
+    const likes = await readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', '==', postId));
+    const count = likes.length;
+    store.posts = store.posts.map(post => post.id === postId ? { ...post, likes_count: count, has_liked: liked } : post);
     store.save();
-    return { liked: post.has_liked, count: post.likes_count };
+    return { liked, count };
   },
-
-  // Comments
   async getComments(postId: string): Promise<Comment[]> {
-    const list = store.comments
-      .filter(c => c.post_id === postId && c.status === 'published')
-      .map(c => ({
-        ...c,
-        author: store.profiles.find(p => p.id === c.author_id),
-      }));
-
-    return list.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    if (!auth.currentUser) return [];
+    const comments = await readCollection<Comment>('comments', where('post_id', '==', postId), where('status', '==', 'published'));
+    const result = await Promise.all(comments.map(async comment => ({
+      ...comment, author: await this.getProfileById(comment.author_id) || undefined,
+    })));
+    result.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    return result;
   },
-
   async createComment(postId: string, authorId: string, body: string): Promise<Comment> {
-    const post = store.posts.find(p => p.id === postId);
-    if (!post) throw new Error('Post not found');
-
-    const newComment: Comment = {
-      id: 'comm_' + Date.now(),
-      post_id: postId,
-      author_id: authorId,
-      body,
-      status: 'published',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      author: store.profiles.find(p => p.id === authorId),
-    };
-
-    store.comments.push(newComment);
-    post.comments_count = (post.comments_count || 0) + 1;
-
-    if (post.author_id !== authorId) {
-      this.createNotification({
-        recipient_id: post.author_id,
-        actor_id: authorId,
-        type: 'post_comment',
-        reference_type: 'post',
-        reference_id: postId,
-        message: 'commented on your post.',
-      });
+    if (!auth.currentUser || auth.currentUser.uid !== authorId) throw new Error('Sign in before commenting.');
+    const normalizedBody = body.trim();
+    if (!normalizedBody || normalizedBody.length > 4000) throw new Error('Comments must be between 1 and 4000 characters.');
+    const postSnapshot = await getDoc(doc(db, 'posts', postId));
+    if (!postSnapshot.exists()) throw new Error('Post not found.');
+    const now = new Date().toISOString();
+    const id = 'comment_' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+    const comment: Comment = { id, post_id: postId, author_id: authorId, body: normalizedBody, status: 'published', created_at: now, updated_at: now };
+    await setDoc(doc(db, 'comments', id), comment);
+    if (postSnapshot.data().author_id !== authorId) {
+      void this.createNotification({ recipient_id: postSnapshot.data().author_id, actor_id: authorId, type: 'post_comment', reference_type: 'post', reference_id: postId, message: 'commented on your post.' });
     }
-
+    store.comments.push(comment);
     store.save();
-    return newComment;
+    return { ...comment, author: await this.getProfileById(authorId) || undefined };
   },
-
   async deleteComment(commentId: string, userId: string): Promise<void> {
-    const user = store.profiles.find(p => p.id === userId);
-    const comm = store.comments.find(c => c.id === commentId);
-    if (!comm) throw new Error('Comment not found');
-
-    if (comm.author_id !== userId && !user?.is_moderator && !user?.is_admin) {
-      throw new Error('Unauthorized');
-    }
-
-    store.comments = store.comments.filter(c => c.id !== commentId);
-    const post = store.posts.find(p => p.id === comm.post_id);
-    if (post) {
-      post.comments_count = Math.max(0, (post.comments_count || 1) - 1);
-    }
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to delete a comment.');
+    const ref = doc(db, 'comments', commentId);
+    const snapshot = await getDoc(ref);
+    if (!snapshot.exists()) throw new Error('Comment not found.');
+    if (snapshot.data().author_id !== userId) throw new Error('Only the comment author can delete it.');
+    await deleteDoc(ref);
+    store.comments = store.comments.filter(comment => comment.id !== commentId);
     store.save();
   },
-
-  // Friendships & Requests
   async getFriendships(userId: string): Promise<Profile[]> {
     const friendIds = store.friendships
       .filter(f => f.user_a === userId || f.user_b === userId)
