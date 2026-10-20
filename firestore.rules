@@ -45,13 +45,16 @@ service cloud.firestore {
     function canReadPost(postId) {
       return exists(/databases/$(database)/documents/posts/$(postId))
         && (
-          get(/databases/$(database)/documents/posts/$(postId)).data.visibility == 'public'
+          (get(/databases/$(database)/documents/posts/$(postId)).data.visibility == 'public'
+            && get(/databases/$(database)/documents/posts/$(postId)).data.status == 'published')
           || (signedIn() && get(/databases/$(database)/documents/posts/$(postId)).data.author_id == request.auth.uid)
           || (signedIn()
             && get(/databases/$(database)/documents/posts/$(postId)).data.visibility == 'group_only'
+            && get(/databases/$(database)/documents/posts/$(postId)).data.status == 'published'
             && memberOfGroup(get(/databases/$(database)/documents/posts/$(postId)).data.group_id))
           || (signedIn()
             && get(/databases/$(database)/documents/posts/$(postId)).data.visibility == 'friends_only'
+            && get(/databases/$(database)/documents/posts/$(postId)).data.status == 'published'
             && (
               get(/databases/$(database)/documents/posts/$(postId)).data.author_id == request.auth.uid
               || exists(/databases/$(database)/documents/friendships/$(get(/databases/$(database)/documents/posts/$(postId)).data.author_id + '_' + request.auth.uid))
@@ -167,7 +170,8 @@ service cloud.firestore {
     }
 
     match /post_likes/{likeId} {
-      allow read: if signedIn();
+      allow read: if (signedIn() && resource.data.status == 'published' && canReadPost(resource.data.post_id))
+        || owns('author_id') || moderator();
       allow create: if createsAs('user_id')
         && request.resource.data.post_id is string
         && likeId == request.resource.data.post_id + '_' + request.auth.uid
@@ -177,7 +181,8 @@ service cloud.firestore {
     }
 
     match /comments/{commentId} {
-      allow read: if signedIn() && canReadPost(resource.data.post_id);
+      allow read: if (signedIn() && resource.data.status == 'published' && canReadPost(resource.data.post_id))
+        || owns('author_id') || moderator();
       allow create: if createsAs('author_id')
         && request.resource.data.post_id is string
         && request.resource.data.status == 'published'
