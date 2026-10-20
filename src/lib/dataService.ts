@@ -691,210 +691,160 @@ export const DataService = {
     store.save();
   },
   async getFriendships(userId: string): Promise<Profile[]> {
-    const friendIds = store.friendships
-      .filter(f => f.user_a === userId || f.user_b === userId)
-      .map(f => (f.user_a === userId ? f.user_b : f.user_a));
-
-    return store.profiles.filter(p => friendIds.includes(p.id) && p.status === 'active');
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to view your friendships.');
+    const [asA, asB] = await Promise.all([
+      readCollection<Friendship>('friendships', where('user_a', '==', userId)),
+      readCollection<Friendship>('friendships', where('user_b', '==', userId)),
+    ]);
+    const friendIds = [...new Set([...asA, ...asB].map(item => item.user_a === userId ? item.user_b : item.user_a))];
+    const friends = await Promise.all(friendIds.map(id => this.getProfileById(id)));
+    return friends.filter((profile): profile is Profile => !!profile && profile.status === 'active');
   },
-
   async getFriendRequests(userId: string): Promise<{ incoming: FriendRequest[]; outgoing: FriendRequest[] }> {
-    const incoming = store.friendRequests
-      .filter(r => r.recipient_id === userId && r.status === 'pending')
-      .map(r => ({ ...r, sender: store.profiles.find(p => p.id === r.sender_id) }));
-
-    const outgoing = store.friendRequests
-      .filter(r => r.sender_id === userId && r.status === 'pending')
-      .map(r => ({ ...r, recipient: store.profiles.find(p => p.id === r.recipient_id) }));
-
-    return { incoming, outgoing };
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to view your friend requests.');
+    const [incoming, outgoing] = await Promise.all([
+      readCollection<FriendRequest>('friend_requests', where('recipient_id', '==', userId), where('status', '==', 'pending')),
+      readCollection<FriendRequest>('friend_requests', where('sender_id', '==', userId), where('status', '==', 'pending')),
+    ]);
+    const hydratedIncoming = await Promise.all(incoming.map(async request => ({ ...request, sender: await this.getProfileById(request.sender_id) || undefined })));
+    const hydratedOutgoing = await Promise.all(outgoing.map(async request => ({ ...request, recipient: await this.getProfileById(request.recipient_id) || undefined })));
+    return { incoming: hydratedIncoming, outgoing: hydratedOutgoing };
   },
-
   async sendFriendRequest(senderId: string, recipientId: string): Promise<FriendRequest> {
-    if (senderId === recipientId) throw new Error('Cannot send friend request to yourself');
-
-    const existing = store.friendRequests.find(
-      r =>
-        ((r.sender_id === senderId && r.recipient_id === recipientId) ||
-          (r.sender_id === recipientId && r.recipient_id === senderId)) &&
-        r.status === 'pending'
-    );
-    if (existing) throw new Error('Friend request already pending');
-
-    const areAlreadyFriends = store.friendships.some(
-      f =>
-        (f.user_a === senderId && f.user_b === recipientId) ||
-        (f.user_a === recipientId && f.user_b === senderId)
-    );
-    if (areAlreadyFriends) throw new Error('Already friends');
-
-    const req: FriendRequest = {
-      id: 'fr_' + Date.now(),
-      sender_id: senderId,
-      recipient_id: recipientId,
-      status: 'pending',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      sender: store.profiles.find(p => p.id === senderId),
-      recipient: store.profiles.find(p => p.id === recipientId),
-    };
-
-    store.friendRequests.push(req);
-
-    this.createNotification({
-      recipient_id: recipientId,
-      actor_id: senderId,
-      type: 'friend_request',
-      reference_type: 'user',
-      reference_id: senderId,
-      message: 'sent you a friend request.',
-    });
-
+    if (!auth.currentUser || auth.currentUser.uid !== senderId) throw new Error('Sign in before sending a friend request.');
+    if (senderId === recipientId) throw new Error('Cannot send a friend request to yourself.');
+    const recipient = await this.getProfileById(recipientId);
+    if (!recipient || recipient.status !== 'active') throw new Error('This member is unavailable.');
+    if (store.blocks.some(block => (block.blocker_id === senderId && block.blocked_id === recipientId) ||
+      (block.blocker_id === recipientId && block.blocked_id === senderId))) throw new Error('A block prevents this request.');
+    const [outgoing, incoming, friendships] = await Promise.all([
+      readCollection<FriendRequest>('friend_requests', where('sender_id', '==', senderId), where('recipient_id', '==', recipientId), where('status', '==', 'pending')),
+      readCollection<FriendRequest>('friend_requests', where('sender_id', '==', recipientId), where('recipient_id', '==', senderId), where('status', '==', 'pending')),
+      this.getFriendships(senderId),
+    ]);
+    if (outgoing.length || incoming.length) throw new Error('A friend request is already pending.');
+    if (friendships.some(profile => profile.id === recipientId)) throw new Error('You are already friends.');
+    const id = 'fr_' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+    const now = new Date().toISOString();
+    const request: FriendRequest = { id, sender_id: senderId, recipient_id: recipientId, status: 'pending', created_at: now, updated_at: now };
+    await setDoc(doc(db, 'friend_requests', id), request);
+    void this.createNotification({ recipient_id: recipientId, actor_id: senderId, type: 'friend_request', reference_type: 'user', reference_id: senderId, message: 'sent you a friend request.' });
+    store.friendRequests.push(request);
     store.save();
-    return req;
+    return { ...request, sender: await this.getProfileById(senderId) || undefined, recipient };
   },
-
   async acceptFriendRequest(requestId: string, currentUserId: string): Promise<void> {
-    const req = store.friendRequests.find(r => r.id === requestId);
-    if (!req) throw new Error('Request not found');
-    if (req.recipient_id !== currentUserId) throw new Error('Unauthorized');
-
-    req.status = 'accepted';
-    req.updated_at = new Date().toISOString();
-
-    const uA = req.sender_id < req.recipient_id ? req.sender_id : req.recipient_id;
-    const uB = req.sender_id < req.recipient_id ? req.recipient_id : req.sender_id;
-
-    store.friendships.push({
-      id: 'fs_' + Date.now(),
-      user_a: uA,
-      user_b: uB,
-      created_at: new Date().toISOString(),
-    });
-
-    this.createNotification({
-      recipient_id: req.sender_id,
-      actor_id: currentUserId,
-      type: 'friend_accepted',
-      reference_type: 'user',
-      reference_id: currentUserId,
-      message: 'accepted your friend request.',
-    });
-
+    if (!auth.currentUser || auth.currentUser.uid !== currentUserId) throw new Error('Sign in before accepting a friend request.');
+    const requestRef = doc(db, 'friend_requests', requestId);
+    const requestSnapshot = await getDoc(requestRef);
+    if (!requestSnapshot.exists()) throw new Error('Friend request not found.');
+    const request = { ...requestSnapshot.data(), id: requestSnapshot.id } as FriendRequest;
+    if (request.recipient_id !== currentUserId || request.status !== 'pending') throw new Error('This request cannot be accepted.');
+    const now = new Date().toISOString();
+    await updateDoc(requestRef, { status: 'accepted', updated_at: now });
+    const userA = request.sender_id < request.recipient_id ? request.sender_id : request.recipient_id;
+    const userB = request.sender_id < request.recipient_id ? request.recipient_id : request.sender_id;
+    const friendship: Friendship = { id: userA + '_' + userB, user_a: userA, user_b: userB, created_at: now };
+    await setDoc(doc(db, 'friendships', friendship.id), friendship, { merge: true });
+    void this.createNotification({ recipient_id: request.sender_id, actor_id: currentUserId, type: 'friend_accepted', reference_type: 'user', reference_id: currentUserId, message: 'accepted your friend request.' });
+    store.friendRequests = store.friendRequests.map(item => item.id === requestId ? { ...item, status: 'accepted', updated_at: now } : item);
+    store.friendships = store.friendships.filter(item => item.id !== friendship.id).concat(friendship);
     store.save();
   },
-
   async declineFriendRequest(requestId: string): Promise<void> {
-    const req = store.friendRequests.find(r => r.id === requestId);
-    if (req) {
-      req.status = 'rejected';
-      store.save();
-    }
-  },
-
-  async removeFriendship(userA: string, userB: string): Promise<void> {
-    store.friendships = store.friendships.filter(
-      f => !(
-        (f.user_a === userA && f.user_b === userB) ||
-        (f.user_a === userB && f.user_b === userA)
-      )
-    );
+    if (!auth.currentUser) throw new Error('Sign in before declining a friend request.');
+    const requestRef = doc(db, 'friend_requests', requestId);
+    const snapshot = await getDoc(requestRef);
+    if (!snapshot.exists()) return;
+    const request = snapshot.data() as FriendRequest;
+    if (request.recipient_id !== auth.currentUser.uid || request.status !== 'pending') throw new Error('You cannot decline this request.');
+    const now = new Date().toISOString();
+    await updateDoc(requestRef, { status: 'rejected', updated_at: now });
+    store.friendRequests = store.friendRequests.map(item => item.id === requestId ? { ...item, status: 'rejected', updated_at: now } : item);
     store.save();
   },
-
-  // Messaging & Conversations
-  async getConversations(userId: string): Promise<Conversation[]> {
-    const userConvs = store.conversations.filter(c =>
-      c.members.some(m => m.id === userId)
-    );
-
-    return userConvs.map(conv => {
-      const msgs = store.messages.filter(m => m.conversation_id === conv.id);
-      const lastMsg = msgs[msgs.length - 1];
-      return {
-        ...conv,
-        last_message: lastMsg,
-      };
-    }).sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+  async removeFriendship(userA: string, userB: string): Promise<void> {
+    if (!auth.currentUser || (auth.currentUser.uid !== userA && auth.currentUser.uid !== userB)) throw new Error('You can only remove your own friendship.');
+    const userLow = userA < userB ? userA : userB;
+    const userHigh = userA < userB ? userB : userA;
+    const id = userLow + '_' + userHigh;
+    const snapshot = await getDoc(doc(db, 'friendships', id));
+    if (snapshot.exists()) await deleteDoc(doc(db, 'friendships', id));
+    store.friendships = store.friendships.filter(item => !((item.user_a === userA && item.user_b === userB) || (item.user_a === userB && item.user_b === userA)));
+    store.save();
   },
-
+  async getConversations(userId: string): Promise<Conversation[]> {
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to view messages.');
+    const records = await readCollection<any>('conversations', where('member_ids', 'array-contains', userId));
+    const conversations = await Promise.all(records.map(async record => {
+      const ids: string[] = Array.isArray(record.member_ids) ? record.member_ids : [];
+      const members = await Promise.all(ids.map(async (id: string) => await this.getProfileById(id)));
+      return { ...record, members: members.filter((profile): profile is Profile => !!profile) } as Conversation;
+    }));
+    store.conversations = conversations;
+    store.save();
+    return conversations.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+  },
   async getConversationById(convId: string): Promise<Conversation | null> {
-    const conv = store.conversations.find(c => c.id === convId);
-    if (!conv) return null;
+    if (!auth.currentUser) throw new Error('Sign in to open a conversation.');
+    const snapshot = await getDoc(doc(db, 'conversations', convId));
+    if (!snapshot.exists()) return null;
+    const record = snapshot.data();
+    if (!Array.isArray(record.member_ids) || !record.member_ids.includes(auth.currentUser.uid)) throw new Error('You are not a member of this conversation.');
+    const ids = record.member_ids as string[];
+    const members = await Promise.all(ids.map(async id => await this.getProfileById(id)));
+    return { ...record, id: snapshot.id, members: members.filter((profile): profile is Profile => !!profile) } as Conversation;
+  },
+  async getMessages(convId: string): Promise<Message[]> {
+    const conversation = await this.getConversationById(convId);
+    if (!conversation) return [];
+    const records = await readCollection<Message>('messages', where('conversation_id', '==', convId));
+    const messages = await Promise.all(records.map(async message => ({ ...message, sender: await this.getProfileById(message.sender_id) || undefined })));
+    messages.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    store.messages = store.messages.filter(message => message.conversation_id !== convId).concat(messages);
+    store.save();
+    return messages;
+  },
+  async sendMessage(convId: string, senderId: string, body: string): Promise<Message> {
+    if (!auth.currentUser || auth.currentUser.uid !== senderId) throw new Error('Sign in before sending a message.');
+    const conversation = await this.getConversationById(convId);
+    if (!conversation || !conversation.members.some(member => member.id === senderId)) throw new Error('You are not a member of this conversation.');
+    const normalized = body.trim();
+    if (!normalized || normalized.length > 5000) throw new Error('Messages must be between 1 and 5000 characters.');
+    const id = 'msg_' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
+    const now = new Date().toISOString();
+    const message: Message = { id, conversation_id: convId, sender_id: senderId, body: normalized, created_at: now, status: 'sent' };
+    await setDoc(doc(db, 'messages', id), message);
+    const convRef = doc(db, 'conversations', convId);
+    await updateDoc(convRef, { updated_at: now, last_message: { id, conversation_id: convId, sender_id: senderId, body: normalized, created_at: now, status: 'sent' } });
+    for (const member of conversation.members) {
+      if (member.id !== senderId) {
+        void this.createNotification({ recipient_id: member.id, actor_id: senderId, type: 'message', reference_type: 'conversation', reference_id: convId, message: 'sent you a message.' });
+      }
+    }
+    store.messages.push(message);
+    store.conversations = store.conversations.map(item => item.id === convId ? { ...item, updated_at: now, last_message: message } : item);
+    store.save();
+    return { ...message, sender: await this.getProfileById(senderId) || undefined };
+  },
+  async startOrGetDirectConversation(user1Id: string, user2Id: string): Promise<Conversation> {
+    if (!auth.currentUser || auth.currentUser.uid !== user1Id) throw new Error('Sign in as yourself to start a conversation.');
+    if (user1Id === user2Id) throw new Error('You cannot message yourself.');
+    const existing = await readCollection<any>('conversations', where('member_ids', 'array-contains', user1Id));
+    const found = existing.find(conv => Array.isArray(conv.member_ids) && conv.member_ids.length === 2 && conv.member_ids.includes(user2Id));
+    if (found) return this.getConversationById(found.id) as Promise<Conversation>;
+    const [first, second] = await Promise.all([this.getProfileById(user1Id), this.getProfileById(user2Id)]);
+    if (!first || !second) throw new Error('Both profiles must exist before messaging.');
+    const ids = [user1Id, user2Id].sort();
+    const id = 'dm_' + ids[0] + '_' + ids[1];
+    const now = new Date().toISOString();
+    const payload = { id, member_ids: ids, created_at: now, updated_at: now };
+    await setDoc(doc(db, 'conversations', id), payload, { merge: true });
+    const conv = { ...payload, members: [first, second], unread_count: 0 } as Conversation;
+    store.conversations = store.conversations.filter(item => item.id !== id).concat(conv);
+    store.save();
     return conv;
   },
-
-  async getMessages(convId: string): Promise<Message[]> {
-    const list = store.messages.filter(m => m.conversation_id === convId);
-    return list.map(m => ({
-      ...m,
-      sender: store.profiles.find(p => p.id === m.sender_id),
-    }));
-  },
-
-  async sendMessage(convId: string, senderId: string, body: string): Promise<Message> {
-    const conv = store.conversations.find(c => c.id === convId);
-    if (!conv) throw new Error('Conversation not found');
-
-    const newMsg: Message = {
-      id: 'msg_' + Date.now(),
-      conversation_id: convId,
-      sender_id: senderId,
-      body,
-      created_at: new Date().toISOString(),
-      status: 'sent',
-      sender: store.profiles.find(p => p.id === senderId),
-    };
-
-    store.messages.push(newMsg);
-    conv.updated_at = new Date().toISOString();
-    conv.last_message = newMsg;
-
-    // Notify other members
-    conv.members.forEach(m => {
-      if (m.id !== senderId) {
-        this.createNotification({
-          recipient_id: m.id,
-          actor_id: senderId,
-          type: 'message',
-          reference_type: 'conversation',
-          reference_id: convId,
-          message: 'sent you a message.',
-        });
-      }
-    });
-
-    store.save();
-    return newMsg;
-  },
-
-  async startOrGetDirectConversation(user1Id: string, user2Id: string): Promise<Conversation> {
-    // Check if an existing 2-member conversation exists
-    const existing = store.conversations.find(c => {
-      const ids = c.members.map(m => m.id);
-      return ids.length === 2 && ids.includes(user1Id) && ids.includes(user2Id);
-    });
-
-    if (existing) return existing;
-
-    const p1 = store.profiles.find(p => p.id === user1Id);
-    const p2 = store.profiles.find(p => p.id === user2Id);
-    if (!p1 || !p2) throw new Error('Profile not found');
-
-    const newConv: Conversation = {
-      id: 'conv_' + Date.now(),
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      members: [p1, p2],
-      unread_count: 0,
-    };
-
-    store.conversations.unshift(newConv);
-    store.save();
-    return newConv;
-  },
-
-  // Notifications
   async getNotifications(userId: string): Promise<Notification[]> {
     const list = store.notifications
       .filter(n => n.recipient_id === userId)
