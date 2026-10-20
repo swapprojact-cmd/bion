@@ -3,10 +3,10 @@
   "private": true,
   "main": "index.js",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "scripts": {
-    "lint": "node --check index.js"
+    "lint": "node --check index.js && node --check scripts/bootstrap-admin.js"
   },
   "dependencies": {
     "firebase-admin": "^13.4.0",
