@@ -985,26 +985,26 @@ export const DataService = {
     return action;
   },
   async exportUserData(userId: string): Promise<string> {
-    const profile = await this.getProfileById(userId);
-    const priv = await this.getUserPrivate(userId);
-    const posts = store.posts.filter(p => p.author_id === userId);
-    const comments = store.comments.filter(c => c.author_id === userId);
-    const friendships = await this.getFriendships(userId);
-
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('You can export only your own account data.');
+    const [profile, priv, posts, comments, friendships] = await Promise.all([
+      this.getProfileById(userId),
+      this.getUserPrivate(userId),
+      readCollection<Post>('posts', where('author_id', '==', userId)),
+      readCollection<Comment>('comments', where('author_id', '==', userId)),
+      this.getFriendships(userId),
+    ]);
     const payload = {
       export_date: new Date().toISOString(),
       platform: 'BiCircle',
       profile,
       privacy_and_settings: priv,
-      posts,
-      comments,
+      posts: posts.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+      comments: comments.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
       friends_count: friendships.length,
-      friends: friendships.map(f => ({ username: f.username, display_name: f.display_name })),
+      friends: friendships.map(friend => ({ username: friend.username, display_name: friend.display_name })),
     };
-
     return JSON.stringify(payload, null, 2);
   },
-
   async deactivateUser(userId: string): Promise<void> {
     if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('You can deactivate only your own account.');
     const snapshot = await getDoc(doc(db, 'profiles', userId));
