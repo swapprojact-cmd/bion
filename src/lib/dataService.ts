@@ -355,7 +355,7 @@ export const DataService = {
     let joinedGroups: Group[] = [];
     if (currentUserId && auth.currentUser?.uid === currentUserId) {
       ownMemberships = await readCollection<GroupMember>('group_members', where('user_id', '==', currentUserId));
-      const privateIds = new Set(ownMemberships.filter(m => m.membership_status === 'active').map(m => m.group_id));
+      const privateIds = new Set(ownMemberships.map(m => m.group_id));
       for (const groupId of privateIds) {
         if (publicGroups.some(group => group.id === groupId)) continue;
         const snapshot = await getDoc(doc(db, 'groups', groupId));
@@ -391,7 +391,7 @@ export const DataService = {
     const uid = auth.currentUser?.uid;
     if (!uid) throw new Error('Sign in to view group membership.');
     const ownMemberships = await readCollection<GroupMember>('group_members', where('user_id', '==', uid));
-    if (!ownMemberships.some(member => member.group_id === groupId)) return [];
+    if (!ownMemberships.some(member => member.group_id === groupId && member.membership_status === 'active')) return [];
     const members = await readCollection<GroupMember>('group_members', where('group_id', '==', groupId));
     const visible = await Promise.all(members.filter(m => m.membership_status === 'active').map(async member => ({
       ...member, profile: await this.getProfileById(member.user_id) || undefined,
@@ -518,21 +518,26 @@ export const DataService = {
       if (group) groups.set(id, group);
     }));
     if (uid && visible.length) {
-      const postIds = visible.map(post => post.id);
       const likesByPost = new Map<string, number>();
       const likedByMe = new Set<string>();
       const commentsByPost = new Map<string, number>();
-      for (let offset = 0; offset < postIds.length; offset += 30) {
-        const ids = postIds.slice(offset, offset + 30);
-        const [likes, comments] = await Promise.all([
+      // Likes are visible to signed-in members; comments are fetched per readable post
+      // so a mixed query cannot expose comments from somebody else's private post.
+      for (let offset = 0; offset < visible.length; offset += 30) {
+        const batchPosts = visible.slice(offset, offset + 30);
+        const ids = batchPosts.map(post => post.id);
+        const [likes, commentBatches] = await Promise.all([
           readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', 'in', ids)),
-          readCollection<Comment>('comments', where('post_id', 'in', ids)),
+          Promise.all(batchPosts.map(async post => ({
+            postId: post.id,
+            comments: await readCollection<Comment>('comments', where('post_id', '==', post.id)),
+          }))),
         ]);
         for (const like of likes) {
           likesByPost.set(like.post_id, (likesByPost.get(like.post_id) || 0) + 1);
           if (like.user_id === uid) likedByMe.add(like.post_id);
         }
-        for (const comment of comments.filter(c => c.status === 'published')) commentsByPost.set(comment.post_id, (commentsByPost.get(comment.post_id) || 0) + 1);
+        for (const item of commentBatches) commentsByPost.set(item.postId, item.comments.filter(comment => comment.status === 'published').length);
       }
       visible = visible.map(post => ({ ...post, author: authors.get(post.author_id), group: post.group_id ? groups.get(post.group_id) : undefined,
         likes_count: likesByPost.get(post.id) ?? 0, has_liked: likedByMe.has(post.id), comments_count: commentsByPost.get(post.id) ?? 0 }));
