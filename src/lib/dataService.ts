@@ -212,64 +212,36 @@ export function calculateDistanceKm(lat1?: number, lon1?: number, lat2?: number,
 export const DataService = {
   // Nearby & Community Profiles Discovery
   async getNearbyProfiles(currentUserId?: string, options?: {
-    maxDistanceKm?: number;
-    city?: string;
-    intention?: string;
-    searchQuery?: string;
+    maxDistanceKm?: number; city?: string; intention?: string; searchQuery?: string;
     coords?: { lat: number; lng: number };
   }): Promise<Profile[]> {
     const { maxDistanceKm, city, intention, searchQuery, coords } = options || {};
-    const currentUser = currentUserId ? store.profiles.find(p => p.id === currentUserId) : null;
-    const myLat = coords?.lat ?? currentUser?.location_lat ?? 40.6782;
-    const myLng = coords?.lng ?? currentUser?.location_lng ?? -73.9442;
-
-    let list = store.profiles
-      .filter(p => p.status === 'active' && p.show_in_nearby !== false)
-      .map(p => {
-        const dist = calculateDistanceKm(myLat, myLng, p.location_lat, p.location_lng);
-        return {
-          ...p,
-          distance_km: dist !== null ? dist : undefined,
-        };
-      });
-
-    if (currentUserId) {
-      list = list.filter(p => p.id !== currentUserId);
-      const blockedIds = store.blocks
-        .filter(b => b.blocker_id === currentUserId || b.blocked_id === currentUserId)
-        .map(b => (b.blocker_id === currentUserId ? b.blocked_id : b.blocker_id));
-      list = list.filter(p => !blockedIds.includes(p.id));
-    }
-
-    if (city && city !== 'All') {
-      list = list.filter(p => p.location_city?.toLowerCase().includes(city.toLowerCase()));
-    }
-
-    if (intention && intention !== 'All') {
-      list = list.filter(p =>
-        p.relationship_intentions?.some(i => i.toLowerCase().includes(intention.toLowerCase()))
-      );
-    }
-
-    if (maxDistanceKm != null && maxDistanceKm > 0) {
-      list = list.filter(p => p.distance_km != null && p.distance_km <= maxDistanceKm);
-    }
-
-    if (searchQuery && searchQuery.trim()) {
+    const current = currentUserId ? await this.getProfileById(currentUserId) : null;
+    const myLat = coords?.lat ?? current?.location_lat;
+    const myLng = coords?.lng ?? current?.location_lng;
+    const profiles = await this.getProfiles();
+    const blocks = currentUserId ? await this.getBlocks(currentUserId) : [];
+    const blockedIds = new Set(blocks.map(block => block.blocked_id));
+    let list = profiles.filter(profile =>
+      profile.status === 'active' && profile.show_in_nearby !== false &&
+      profile.id !== currentUserId && !blockedIds.has(profile.id)
+    ).map(profile => ({
+      ...profile,
+      distance_km: myLat != null && myLng != null
+        ? calculateDistanceKm(myLat, myLng, profile.location_lat, profile.location_lng) ?? undefined
+        : undefined,
+    }));
+    if (city && city !== 'All') list = list.filter(p => p.location_city?.toLowerCase().includes(city.toLowerCase()));
+    if (intention && intention !== 'All') list = list.filter(p => p.relationship_intentions?.some(i => i.toLowerCase().includes(intention.toLowerCase())));
+    if (maxDistanceKm != null && maxDistanceKm > 0) list = list.filter(p => p.distance_km != null && p.distance_km <= maxDistanceKm);
+    if (searchQuery?.trim()) {
       const q = searchQuery.toLowerCase();
-      list = list.filter(p =>
-        p.display_name.toLowerCase().includes(q) ||
-        p.username.toLowerCase().includes(q) ||
-        p.bio?.toLowerCase().includes(q) ||
-        p.interests.some(i => i.toLowerCase().includes(q)) ||
-        p.relationship_vibe?.toLowerCase().includes(q) ||
-        p.location_city?.toLowerCase().includes(q)
-      );
+      list = list.filter(p => p.display_name.toLowerCase().includes(q) || p.username.toLowerCase().includes(q) ||
+        p.bio?.toLowerCase().includes(q) || p.interests.some(i => i.toLowerCase().includes(q)) ||
+        p.relationship_vibe?.toLowerCase().includes(q) || p.location_city?.toLowerCase().includes(q));
     }
-
-    return list.sort((a, b) => (a.distance_km ?? 99999) - (b.distance_km ?? 99999));
+    return list.sort((a, b) => (a.distance_km ?? Number.POSITIVE_INFINITY) - (b.distance_km ?? Number.POSITIVE_INFINITY));
   },
-
   async addProfilePhoto(userId: string, photo: { url: string; caption?: string; is_18_plus?: boolean }): Promise<Profile> {
     const p = store.profiles.find(x => x.id === userId);
     if (!p) throw new Error('Profile not found');
@@ -336,275 +308,190 @@ export const DataService = {
   },
 
   async seedFirestoreWithInitialData(): Promise<{ success: boolean; count: number }> {
-    let count = 0;
-    try {
-      for (const p of store.profiles) {
-        await setDoc(doc(db, 'profiles', p.id), p, { merge: true });
-        count++;
-      }
-      for (const g of store.groups) {
-        await setDoc(doc(db, 'groups', g.id), g, { merge: true });
-        count++;
-      }
-      for (const post of store.posts) {
-        await setDoc(doc(db, 'posts', post.id), post, { merge: true });
-        count++;
-      }
-      return { success: true, count };
-    } catch (e) {
-      console.error('Error seeding Firestore:', e);
-      return { success: false, count };
-    }
+    // Never upload demo fixtures into a production database.
+    console.warn('Firestore fixture seeding is disabled. Create real data through the app.');
+    return { success: false, count: 0 };
   },
-
-  // Profiles
   async getProfiles(): Promise<Profile[]> {
-    try {
-      const snap = await getDocs(collection(db, 'profiles'));
-      if (!snap.empty) {
-        const live = snap.docs.map(d => d.data() as Profile);
-        if (live.length > 0) return live.filter(p => p.status === 'active');
-      }
-    } catch {
-      // fallback to store
+    const allowedVisibility = auth.currentUser ? ['public', 'members_only'] : ['public'];
+    const live = await readCollection<Profile>('profiles',
+      where('visibility', 'in', allowedVisibility),
+      where('status', '==', 'active')
+    );
+    if (auth.currentUser && !live.some(profile => profile.id === auth.currentUser?.uid)) {
+      const mine = await this.getProfileById(auth.currentUser.uid);
+      if (mine) live.push(mine);
     }
-    return store.profiles.filter(p => p.status === 'active');
+    cacheCollection(live, 'profiles');
+    return live;
   },
-
   async getProfileById(id: string): Promise<Profile | null> {
     try {
-      const docSnap = await getDoc(doc(db, 'profiles', id));
-      if (docSnap.exists()) {
-        return docSnap.data() as Profile;
-      }
-    } catch {
-      // fallback
+      const snapshot = await getDoc(doc(db, 'profiles', id));
+      return snapshot.exists() ? ({ ...snapshot.data(), id: snapshot.id } as Profile) : null;
+    } catch (error: any) {
+      if (error?.code === 'permission-denied' || error?.code === 'firestore/permission-denied') return null;
+      throw new Error('Could not load profile from Firestore: ' + firestoreErrorMessage(error));
     }
-    return store.profiles.find(p => p.id === id) || null;
   },
-
   async updateProfile(id: string, updates: Partial<Profile>): Promise<Profile> {
-    const idx = store.profiles.findIndex(p => p.id === id);
-    if (idx !== -1) {
-      store.profiles[idx] = {
-        ...store.profiles[idx],
-        ...updates,
-        updated_at: new Date().toISOString(),
-      };
-      store.save();
-
-      try {
-        await setDoc(doc(db, 'profiles', id), store.profiles[idx], { merge: true });
-      } catch (e) {
-        console.warn('Firestore profile sync:', e);
-      }
-
-      return store.profiles[idx];
-    }
-    throw new Error('Profile not found');
-  },
-
-  // User Private Settings
-  async getUserPrivate(userId: string): Promise<UserPrivate> {
-    try {
-      const docSnap = await getDoc(doc(db, 'user_private', userId));
-      if (docSnap.exists()) {
-        return docSnap.data() as UserPrivate;
-      }
-    } catch {
-      // fallback
-    }
-
-    if (!store.userPrivateMap[userId]) {
-      store.userPrivateMap[userId] = {
-        user_id: userId,
-        messaging_permission: 'everyone',
-        allow_friend_requests: true,
-        email_notifications: true,
-        notify_messages: true,
-        notify_comments: true,
-        notify_friend_requests: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-      store.save();
-
-      try {
-        await setDoc(doc(db, 'user_private', userId), store.userPrivateMap[userId], { merge: true });
-      } catch {
-        // quiet
-      }
-    }
-    return store.userPrivateMap[userId];
-  },
-
-  async updateUserPrivate(userId: string, updates: Partial<UserPrivate>): Promise<UserPrivate> {
-    const current = await this.getUserPrivate(userId);
-    store.userPrivateMap[userId] = {
-      ...current,
-      ...updates,
-      updated_at: new Date().toISOString(),
-    };
+    if (auth.currentUser?.uid !== id) throw new Error('You can update only your own profile.');
+    const current = await this.getProfileById(id);
+    if (!current) throw new Error('Profile not found in Firestore.');
+    const updated: Profile = { ...current, ...updates, id, updated_at: new Date().toISOString() };
+    const { distance_km: _distance, ...payload } = updated;
+    await setDoc(doc(db, 'profiles', id), payload, { merge: true });
+    const index = store.profiles.findIndex(p => p.id === id);
+    if (index >= 0) store.profiles[index] = updated; else store.profiles.push(updated);
     store.save();
-
-    try {
-      await setDoc(doc(db, 'user_private', userId), store.userPrivateMap[userId], { merge: true });
-    } catch (e) {
-      console.warn('Firestore user_private sync:', e);
-    }
-
-    return store.userPrivateMap[userId];
+    return updated;
   },
-
-  // Groups
+  async getUserPrivate(userId: string): Promise<UserPrivate> {
+    if (auth.currentUser?.uid !== userId) throw new Error('You can read only your own private settings.');
+    const snapshot = await getDoc(doc(db, 'user_private', userId));
+    if (snapshot.exists()) {
+      const value = { ...snapshot.data(), user_id: userId } as UserPrivate;
+      store.userPrivateMap[userId] = value;
+      store.save();
+      return value;
+    }
+    const now = new Date().toISOString();
+    const defaults: UserPrivate = {
+      user_id: userId, messaging_permission: 'everyone', allow_friend_requests: true,
+      email_notifications: true, notify_messages: true, notify_comments: true,
+      notify_friend_requests: true, created_at: now, updated_at: now,
+    };
+    await setDoc(doc(db, 'user_private', userId), defaults);
+    store.userPrivateMap[userId] = defaults;
+    store.save();
+    return defaults;
+  },
+  async updateUserPrivate(userId: string, updates: Partial<UserPrivate>): Promise<UserPrivate> {
+    if (auth.currentUser?.uid !== userId) throw new Error('You can update only your own private settings.');
+    const current = await this.getUserPrivate(userId);
+    const updated: UserPrivate = { ...current, ...updates, user_id: userId, updated_at: new Date().toISOString() };
+    await setDoc(doc(db, 'user_private', userId), updated, { merge: true });
+    store.userPrivateMap[userId] = updated;
+    store.save();
+    return updated;
+  },
   async getGroups(currentUserId?: string): Promise<Group[]> {
-    try {
-      const snap = await getDocs(collection(db, 'groups'));
-      if (!snap.empty) {
-        const live = snap.docs.map(d => d.data() as Group);
-        if (live.length > 0) {
-          return live.map(group => {
-            const members = store.groupMembers.filter(gm => gm.group_id === group.id && gm.membership_status === 'active');
-            const userMember = currentUserId
-              ? store.groupMembers.find(gm => gm.group_id === group.id && gm.user_id === currentUserId)
-              : undefined;
-
-            return {
-              ...group,
-              member_count: members.length || group.member_count || 1,
-              is_member: userMember?.membership_status === 'active',
-              membership_status: userMember?.membership_status,
-              user_role: userMember?.role,
-            };
-          });
-        }
+    const publicGroups = await readCollection<Group>('groups', where('visibility', '==', 'public'));
+    let ownMemberships: GroupMember[] = [];
+    let joinedGroups: Group[] = [];
+    if (currentUserId && auth.currentUser?.uid === currentUserId) {
+      ownMemberships = await readCollection<GroupMember>('group_members', where('user_id', '==', currentUserId));
+      const privateIds = new Set(ownMemberships.filter(m => m.membership_status === 'active').map(m => m.group_id));
+      for (const groupId of privateIds) {
+        if (publicGroups.some(group => group.id === groupId)) continue;
+        const snapshot = await getDoc(doc(db, 'groups', groupId));
+        if (snapshot.exists()) joinedGroups.push({ ...snapshot.data(), id: snapshot.id } as Group);
       }
-    } catch {
-      // fallback
     }
-
-    return store.groups.map(group => {
-      const members = store.groupMembers.filter(gm => gm.group_id === group.id && gm.membership_status === 'active');
-      const userMember = currentUserId
-        ? store.groupMembers.find(gm => gm.group_id === group.id && gm.user_id === currentUserId)
-        : undefined;
-
-      return {
-        ...group,
-        member_count: members.length || group.member_count || 1,
-        is_member: userMember?.membership_status === 'active',
-        membership_status: userMember?.membership_status,
-        user_role: userMember?.role,
-      };
-    });
+    store.groupMembers = ownMemberships;
+    const combined = [...new Map([...publicGroups, ...joinedGroups].map(group => [group.id, group])).values()]
+      .filter(group => group.status === 'active')
+      .map(group => {
+        const own = ownMemberships.find(m => m.group_id === group.id);
+        return { ...group, is_member: own?.membership_status === 'active',
+          membership_status: own?.membership_status, user_role: own?.role };
+      });
+    store.groups = combined;
+    store.save();
+    return combined;
   },
-
   async getGroupById(groupId: string, currentUserId?: string): Promise<Group | null> {
     const all = await this.getGroups(currentUserId);
-    return all.find(g => g.id === groupId || g.slug === groupId) || null;
+    const cached = all.find(group => group.id === groupId || group.slug === groupId);
+    if (cached) return cached;
+    try {
+      const snapshot = await getDoc(doc(db, 'groups', groupId));
+      if (!snapshot.exists()) return null;
+      return { ...snapshot.data(), id: snapshot.id } as Group;
+    } catch (error: any) {
+      if (error?.code === 'permission-denied' || error?.code === 'firestore/permission-denied') return null;
+      throw new Error('Could not load group from Firestore: ' + firestoreErrorMessage(error));
+    }
   },
-
   async getGroupMembers(groupId: string): Promise<GroupMember[]> {
-    const list = store.groupMembers.filter(m => m.group_id === groupId);
-    return list.map(m => ({
-      ...m,
-      profile: store.profiles.find(p => p.id === m.user_id),
-    }));
+    const uid = auth.currentUser?.uid;
+    if (!uid) throw new Error('Sign in to view group membership.');
+    const ownSnapshot = await getDoc(doc(db, 'group_members', groupId + '_' + uid));
+    if (!ownSnapshot.exists()) return [];
+    const group = await this.getGroupById(groupId, uid);
+    if (!group) return [];
+    const members = await readCollection<GroupMember>('group_members', where('group_id', '==', groupId));
+    const visible = await Promise.all(members.filter(m => m.membership_status === 'active').map(async member => ({
+      ...member, profile: await this.getProfileById(member.user_id) || undefined,
+    })));
+    store.groupMembers = store.groupMembers.filter(member => member.group_id !== groupId).concat(members);
+    store.save();
+    return visible;
   },
-
   async createGroup(data: Omit<Group, 'id' | 'created_at' | 'updated_at'>): Promise<Group> {
-    const newGroup: Group = {
-      ...data,
-      id: 'grp_' + Date.now(),
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      member_count: 1,
-      is_member: true,
-      membership_status: 'active',
-      user_role: 'owner',
-    };
-
-    store.groups.unshift(newGroup);
-    // Add owner as group member
-    store.groupMembers.push({
-      group_id: newGroup.id,
-      user_id: data.owner_id,
-      role: 'owner',
-      membership_status: 'active',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
+    const uid = auth.currentUser?.uid;
+    if (!uid || data.owner_id !== uid) throw new Error('Sign in as the group owner before creating a group.');
+    const id = 'grp_' + crypto.randomUUID().replace(/-/g, '').slice(0, 18);
+    const now = new Date().toISOString();
+    const group: Group = { ...data, id, created_at: now, updated_at: now, member_count: 1, is_member: true, membership_status: 'active', user_role: 'owner' };
+    const { is_member: _isMember, membership_status: _membership, user_role: _role, member_count: _memberCount, ...groupPayload } = group;
+    const membership: GroupMember = { group_id: id, user_id: uid, role: 'owner', membership_status: 'active', created_at: now, updated_at: now };
+    await setDoc(doc(db, 'groups', id), groupPayload);
+    try {
+      await setDoc(doc(db, 'group_members', id + '_' + uid), membership);
+    } catch (error) {
+      await deleteDoc(doc(db, 'groups', id));
+      throw new Error('Group was not created because owner membership could not be saved: ' + firestoreErrorMessage(error));
+    }
+    store.groups.unshift(group);
+    store.groupMembers.push(membership);
     store.save();
-    return newGroup;
+    return group;
   },
-
   async joinGroup(groupId: string, userId: string): Promise<GroupMember> {
-    const existing = store.groupMembers.find(gm => gm.group_id === groupId && gm.user_id === userId);
-    const targetGroup = store.groups.find(g => g.id === groupId);
-    const status = targetGroup?.visibility === 'private' ? 'pending' : 'active';
-
-    if (existing) {
-      existing.membership_status = status;
-      existing.updated_at = new Date().toISOString();
-      store.save();
-      return existing;
-    }
-
-    const newMember: GroupMember = {
-      group_id: groupId,
-      user_id: userId,
-      role: 'member',
-      membership_status: status,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in before joining a group.');
+    const group = await this.getGroupById(groupId, userId);
+    if (!group) throw new Error('Group not found or you do not have access.');
+    const ref = doc(db, 'group_members', groupId + '_' + userId);
+    const existing = await getDoc(ref);
+    const now = new Date().toISOString();
+    const membership: GroupMember = {
+      group_id: groupId, user_id: userId, role: 'member',
+      membership_status: group.visibility === 'private' ? 'pending' : 'active',
+      created_at: existing.exists() ? String(existing.data().created_at || now) : now, updated_at: now,
     };
-    store.groupMembers.push(newMember);
-
-    // If private group, notify owner
-    if (status === 'pending' && targetGroup) {
-      this.createNotification({
-        recipient_id: targetGroup.owner_id,
-        actor_id: userId,
-        type: 'group_invite',
-        reference_type: 'group',
-        reference_id: groupId,
-        message: `requested to join ${targetGroup.name}`,
-      });
-    }
-
+    if (existing.exists()) await setDoc(ref, membership, { merge: true });
+    else await setDoc(ref, membership);
+    store.groupMembers = store.groupMembers.filter(m => !(m.group_id === groupId && m.user_id === userId)).concat(membership);
     store.save();
-    return newMember;
+    if (membership.membership_status === 'pending') {
+      void this.createNotification({ recipient_id: group.owner_id, actor_id: userId, type: 'group_invite', reference_type: 'group', reference_id: groupId, message: 'requested to join ' + group.name });
+    }
+    return membership;
   },
-
   async leaveGroup(groupId: string, userId: string): Promise<void> {
-    store.groupMembers = store.groupMembers.filter(
-      gm => !(gm.group_id === groupId && gm.user_id === userId)
-    );
+    if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in before leaving a group.');
+    const group = await this.getGroupById(groupId, userId);
+    if (group?.owner_id === userId) throw new Error('Transfer group ownership before leaving your own group.');
+    await deleteDoc(doc(db, 'group_members', groupId + '_' + userId));
+    store.groupMembers = store.groupMembers.filter(member => !(member.group_id === groupId && member.user_id === userId));
     store.save();
   },
-
   async updateMemberStatus(groupId: string, userId: string, status: 'active' | 'rejected'): Promise<void> {
-    const member = store.groupMembers.find(gm => gm.group_id === groupId && gm.user_id === userId);
-    if (member) {
-      member.membership_status = status;
-      member.updated_at = new Date().toISOString();
-      store.save();
-
-      if (status === 'active') {
-        const grp = store.groups.find(g => g.id === groupId);
-        this.createNotification({
-          recipient_id: userId,
-          actor_id: member.user_id,
-          type: 'group_approved',
-          reference_type: 'group',
-          reference_id: groupId,
-          message: `Your request to join ${grp?.name || 'the group'} was approved!`,
-        });
-      }
-    }
+    const uid = auth.currentUser?.uid;
+    if (!uid) throw new Error('Sign in before reviewing a group request.');
+    const group = await this.getGroupById(groupId, uid);
+    if (!group || group.owner_id !== uid) throw new Error('Only this group owner can review join requests.');
+    const ref = doc(db, 'group_members', groupId + '_' + userId);
+    const snapshot = await getDoc(ref);
+    if (!snapshot.exists()) throw new Error('Group membership request not found.');
+    const membershipStatus = status === 'rejected' ? 'rejected' : 'active';
+    await updateDoc(ref, { membership_status: membershipStatus, updated_at: new Date().toISOString() });
+    const member = { ...snapshot.data(), group_id: groupId, user_id: userId, membership_status: membershipStatus } as GroupMember;
+    store.groupMembers = store.groupMembers.filter(m => !(m.group_id === groupId && m.user_id === userId)).concat(member);
+    store.save();
+    if (status === 'active') void this.createNotification({ recipient_id: userId, actor_id: uid, type: 'group_approved', reference_type: 'group', reference_id: groupId, message: 'Your request to join ' + group.name + ' was approved.' });
   },
-
-  // Posts
   async getPosts(options?: {
     currentUserId?: string;
     groupId?: string;
