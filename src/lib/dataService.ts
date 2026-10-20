@@ -286,11 +286,12 @@ export const DataService = {
     return { success: false, count: 0 };
   },
   async getProfiles(): Promise<Profile[]> {
-    const allowedVisibility = auth.currentUser ? ['public', 'members_only'] : ['public'];
-    const live = await readCollection<Profile>('profiles',
-      where('visibility', 'in', allowedVisibility),
-      where('status', '==', 'active')
-    );
+    const publicProfiles = await readCollection<Profile>('profiles', where('visibility', '==', 'public'));
+    const memberProfiles = auth.currentUser
+      ? await readCollection<Profile>('profiles', where('visibility', '==', 'members_only'))
+      : [];
+    const live = [...new Map([...publicProfiles, ...memberProfiles].map(profile => [profile.id, profile])).values()]
+      .filter(profile => profile.status === 'active');
     if (auth.currentUser && !live.some(profile => profile.id === auth.currentUser?.uid)) {
       const mine = await this.getProfileById(auth.currentUser.uid);
       if (mine) live.push(mine);
@@ -466,38 +467,37 @@ export const DataService = {
   }): Promise<Post[]> {
     const uid = auth.currentUser?.uid || null;
     if (options?.currentUserId && options.currentUserId !== uid) throw new Error('The requested feed user does not match the signed-in account.');
-    const shared = [where('status', '==', 'published')];
     const loads: Promise<Post[]>[] = [];
     if (options?.groupId) {
       if (!uid) return [];
-      const joined = await this.getGroups(uid);
-      if (!joined.some(group => group.id === options.groupId && group.is_member)) return [];
-      loads.push(readCollection<Post>('posts', ...shared, where('group_id', '==', options.groupId), where('visibility', '==', 'group_only')));
+      const groups = await this.getGroups(uid);
+      if (!groups.some(group => group.id === options.groupId && group.is_member)) return [];
+      loads.push(readCollection<Post>('posts', where('group_id', '==', options.groupId), where('visibility', '==', 'group_only')));
     } else if (options?.authorId) {
-      if (!uid) loads.push(readCollection<Post>('posts', ...shared, where('author_id', '==', options.authorId), where('visibility', '==', 'public')));
-      else if (options.authorId === uid) loads.push(readCollection<Post>('posts', ...shared, where('author_id', '==', uid)));
+      if (!uid) loads.push(readCollection<Post>('posts', where('author_id', '==', options.authorId), where('visibility', '==', 'public')));
+      else if (options.authorId === uid) loads.push(readCollection<Post>('posts', where('author_id', '==', uid)));
       else {
-        loads.push(readCollection<Post>('posts', ...shared, where('author_id', '==', options.authorId), where('visibility', '==', 'public')));
+        loads.push(readCollection<Post>('posts', where('author_id', '==', options.authorId), where('visibility', '==', 'public')));
         if ((await this.getFriendships(uid)).some(friend => friend.id === options.authorId)) {
-          loads.push(readCollection<Post>('posts', ...shared, where('author_id', '==', options.authorId), where('visibility', '==', 'friends_only')));
+          loads.push(readCollection<Post>('posts', where('author_id', '==', options.authorId), where('visibility', '==', 'friends_only')));
         }
       }
     } else {
-      loads.push(readCollection<Post>('posts', ...shared, where('visibility', '==', 'public')));
+      loads.push(readCollection<Post>('posts', where('visibility', '==', 'public')));
       if (uid) {
-        loads.push(readCollection<Post>('posts', ...shared, where('author_id', '==', uid)));
+        loads.push(readCollection<Post>('posts', where('author_id', '==', uid)));
         const friends = await this.getFriendships(uid);
         for (const friend of friends) {
-          loads.push(readCollection<Post>('posts', ...shared, where('author_id', '==', friend.id), where('visibility', '==', 'friends_only')));
+          loads.push(readCollection<Post>('posts', where('author_id', '==', friend.id), where('visibility', '==', 'friends_only')));
         }
-        const memberships = await readCollection<GroupMember>('group_members', where('user_id', '==', uid), where('membership_status', '==', 'active'));
-        for (const groupId of [...new Set(memberships.map(member => member.group_id))]) {
-          loads.push(readCollection<Post>('posts', ...shared, where('group_id', '==', groupId), where('visibility', '==', 'group_only')));
+        const memberships = await readCollection<GroupMember>('group_members', where('user_id', '==', uid));
+        for (const groupId of [...new Set(memberships.filter(m => m.membership_status === 'active').map(member => member.group_id))]) {
+          loads.push(readCollection<Post>('posts', where('group_id', '==', groupId), where('visibility', '==', 'group_only')));
         }
       }
     }
     const batches = await Promise.all(loads);
-    const unique = [...new Map(batches.flat().map(post => [post.id, post])).values()];
+    const unique = [...new Map(batches.flat().filter(post => post.status === 'published').map(post => [post.id, post])).values()];
     const blocks = uid ? await this.getBlocks(uid) : [];
     const blocked = new Set(blocks.map(block => block.blocked_id));
     let visible = unique.filter(post => !blocked.has(post.author_id));
@@ -517,7 +517,6 @@ export const DataService = {
       const group = await this.getGroupById(id, uid || undefined);
       if (group) groups.set(id, group);
     }));
-
     if (uid && visible.length) {
       const postIds = visible.map(post => post.id);
       const likesByPost = new Map<string, number>();
@@ -527,13 +526,13 @@ export const DataService = {
         const ids = postIds.slice(offset, offset + 30);
         const [likes, comments] = await Promise.all([
           readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', 'in', ids)),
-          readCollection<Comment>('comments', where('post_id', 'in', ids), where('status', '==', 'published')),
+          readCollection<Comment>('comments', where('post_id', 'in', ids)),
         ]);
         for (const like of likes) {
           likesByPost.set(like.post_id, (likesByPost.get(like.post_id) || 0) + 1);
           if (like.user_id === uid) likedByMe.add(like.post_id);
         }
-        for (const comment of comments) commentsByPost.set(comment.post_id, (commentsByPost.get(comment.post_id) || 0) + 1);
+        for (const comment of comments.filter(c => c.status === 'published')) commentsByPost.set(comment.post_id, (commentsByPost.get(comment.post_id) || 0) + 1);
       }
       visible = visible.map(post => ({ ...post, author: authors.get(post.author_id), group: post.group_id ? groups.get(post.group_id) : undefined,
         likes_count: likesByPost.get(post.id) ?? 0, has_liked: likedByMe.has(post.id), comments_count: commentsByPost.get(post.id) ?? 0 }));
@@ -598,17 +597,18 @@ export const DataService = {
     if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in before liking a post.');
     const postSnapshot = await getDoc(doc(db, 'posts', postId));
     if (!postSnapshot.exists()) throw new Error('Post not found.');
-    const likeRecords = await readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', '==', postId), where('user_id', '==', userId));
+    const likeRecords = await readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', '==', postId));
+    const exists = likeRecords.some(like => like.user_id === userId);
     const likeId = postId + '_' + userId;
     let liked: boolean;
-    if (likeRecords.length) {
+    if (exists) {
       await deleteDoc(doc(db, 'post_likes', likeId));
       liked = false;
     } else {
       await setDoc(doc(db, 'post_likes', likeId), { post_id: postId, user_id: userId, created_at: new Date().toISOString() });
       liked = true;
     }
-    const allLikes = await readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', '==', postId));
+    const allLikes = exists ? likeRecords.filter(like => like.user_id !== userId) : [...likeRecords, { id: likeId, post_id: postId, user_id: userId }];
     const count = allLikes.length;
     store.posts = store.posts.map(post => post.id === postId ? { ...post, likes_count: count, has_liked: liked } : post);
     store.save();
@@ -662,10 +662,12 @@ export const DataService = {
   },
   async getFriendRequests(userId: string): Promise<{ incoming: FriendRequest[]; outgoing: FriendRequest[] }> {
     if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in to view your friend requests.');
-    const [incoming, outgoing] = await Promise.all([
-      readCollection<FriendRequest>('friend_requests', where('recipient_id', '==', userId), where('status', '==', 'pending')),
-      readCollection<FriendRequest>('friend_requests', where('sender_id', '==', userId), where('status', '==', 'pending')),
+    const [incomingDocs, outgoingDocs] = await Promise.all([
+      readCollection<FriendRequest>('friend_requests', where('recipient_id', '==', userId)),
+      readCollection<FriendRequest>('friend_requests', where('sender_id', '==', userId)),
     ]);
+    const incoming = incomingDocs.filter(request => request.status === 'pending');
+    const outgoing = outgoingDocs.filter(request => request.status === 'pending');
     const hydratedIncoming = await Promise.all(incoming.map(async request => ({ ...request, sender: await this.getProfileById(request.sender_id) || undefined })));
     const hydratedOutgoing = await Promise.all(outgoing.map(async request => ({ ...request, recipient: await this.getProfileById(request.recipient_id) || undefined })));
     return { incoming: hydratedIncoming, outgoing: hydratedOutgoing };
@@ -677,12 +679,15 @@ export const DataService = {
     if (!recipient || recipient.status !== 'active') throw new Error('This member is unavailable.');
     const ownBlocks = await this.getBlocks(senderId);
     if (ownBlocks.some(block => block.blocked_id === recipientId)) throw new Error('You have blocked this member.');
-    const [outgoing, incoming, friendships] = await Promise.all([
-      readCollection<FriendRequest>('friend_requests', where('sender_id', '==', senderId), where('recipient_id', '==', recipientId), where('status', '==', 'pending')),
-      readCollection<FriendRequest>('friend_requests', where('sender_id', '==', recipientId), where('recipient_id', '==', senderId), where('status', '==', 'pending')),
+    const [outgoingDocs, incomingDocs, friendships] = await Promise.all([
+      readCollection<FriendRequest>('friend_requests', where('sender_id', '==', senderId)),
+      readCollection<FriendRequest>('friend_requests', where('recipient_id', '==', senderId)),
       this.getFriendships(senderId),
     ]);
-    if (outgoing.length || incoming.length) throw new Error('A friend request is already pending.');
+    const pending = [...outgoingDocs, ...incomingDocs].some(request => request.status === 'pending' &&
+      ((request.sender_id === senderId && request.recipient_id === recipientId) ||
+       (request.sender_id === recipientId && request.recipient_id === senderId)));
+    if (pending) throw new Error('A friend request is already pending.');
     if (friendships.some(profile => profile.id === recipientId)) throw new Error('You are already friends.');
     const id = 'fr_' + crypto.randomUUID().replace(/-/g, '').slice(0, 20);
     const now = new Date().toISOString();
@@ -725,11 +730,13 @@ export const DataService = {
   },
   async removeFriendship(userA: string, userB: string): Promise<void> {
     if (!auth.currentUser || (auth.currentUser.uid !== userA && auth.currentUser.uid !== userB)) throw new Error('You can only remove your own friendship.');
-    const userLow = userA < userB ? userA : userB;
-    const userHigh = userA < userB ? userB : userA;
-    const id = userLow + '_' + userHigh;
-    const snapshot = await getDoc(doc(db, 'friendships', id));
-    if (snapshot.exists()) await deleteDoc(doc(db, 'friendships', id));
+    const [asA, asB] = await Promise.all([
+      readCollection<Friendship>('friendships', where('user_a', '==', userA)),
+      readCollection<Friendship>('friendships', where('user_b', '==', userA)),
+    ]);
+    const matches = [...asA, ...asB].filter(item =>
+      (item.user_a === userA && item.user_b === userB) || (item.user_a === userB && item.user_b === userA));
+    await Promise.all(matches.map(item => deleteDoc(doc(db, 'friendships', item.id))));
     store.friendships = store.friendships.filter(item => !((item.user_a === userA && item.user_b === userB) || (item.user_a === userB && item.user_b === userA)));
     store.save();
   },
