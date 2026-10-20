@@ -170,8 +170,7 @@ service cloud.firestore {
     }
 
     match /post_likes/{likeId} {
-      allow read: if (signedIn() && resource.data.status == 'published' && canReadPost(resource.data.post_id))
-        || owns('author_id') || moderator();
+      allow read: if signedIn() && canReadPost(resource.data.post_id);
       allow create: if createsAs('user_id')
         && request.resource.data.post_id is string
         && likeId == request.resource.data.post_id + '_' + request.auth.uid
