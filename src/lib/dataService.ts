@@ -746,7 +746,7 @@ export const DataService = {
     await updateDoc(requestRef, { status: 'accepted', updated_at: now });
     const userA = request.sender_id < request.recipient_id ? request.sender_id : request.recipient_id;
     const userB = request.sender_id < request.recipient_id ? request.recipient_id : request.sender_id;
-    const friendship: Friendship = { id: userA + '_' + userB, user_a: userA, user_b: userB, created_at: now };
+    const friendship: Friendship = { id: userA + '_' + userB, user_a: userA, user_b: userB, request_id: requestId, created_at: now };
     await setDoc(doc(db, 'friendships', friendship.id), friendship, { merge: true });
     void this.createNotification({ recipient_id: request.sender_id, actor_id: currentUserId, type: 'friend_accepted', reference_type: 'user', reference_id: currentUserId, message: 'accepted your friend request.' });
     store.friendRequests = store.friendRequests.map(item => item.id === requestId ? { ...item, status: 'accepted', updated_at: now } : item);
