@@ -224,7 +224,16 @@ service cloud.firestore {
         && request.resource.data.user_a is string
         && request.resource.data.user_b is string
         && request.resource.data.user_a != request.resource.data.user_b
-        && (request.auth.uid == request.resource.data.user_a || request.auth.uid == request.resource.data.user_b);
+        && (request.auth.uid == request.resource.data.user_a || request.auth.uid == request.resource.data.user_b)
+        && request.resource.data.request_id is string
+        && exists(/databases/$(database)/documents/friend_requests/$(request.resource.data.request_id))
+        && get(/databases/$(database)/documents/friend_requests/$(request.resource.data.request_id)).data.status == 'accepted'
+        && (
+          (get(/databases/$(database)/documents/friend_requests/$(request.resource.data.request_id)).data.sender_id == request.resource.data.user_a
+            && get(/databases/$(database)/documents/friend_requests/$(request.resource.data.request_id)).data.recipient_id == request.resource.data.user_b)
+          || (get(/databases/$(database)/documents/friend_requests/$(request.resource.data.request_id)).data.sender_id == request.resource.data.user_b
+            && get(/databases/$(database)/documents/friend_requests/$(request.resource.data.request_id)).data.recipient_id == request.resource.data.user_a)
+        );
       allow update: if signedIn()
         && (request.auth.uid == resource.data.user_a || request.auth.uid == resource.data.user_b)
         && request.resource.data.user_a == resource.data.user_a
