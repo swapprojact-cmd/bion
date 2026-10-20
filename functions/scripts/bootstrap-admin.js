@@ -1,6 +1,6 @@
-const { initializeApp, applicationDefault, getApp } = require("firebase-admin/app");
+const { initializeApp, applicationDefault } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
-const { getFirestore } = require("firebase-admin/firestore");
+const { Firestore } = require("@google-cloud/firestore");
 
 const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
 const uid = process.env.FIREBASE_TARGET_UID;
@@ -16,7 +16,8 @@ async function main() {
   const auth = getAuth();
   const user = await auth.getUser(uid);
   await auth.setCustomUserClaims(uid, { ...(user.customClaims || {}), admin: true, moderator: true });
-  await getFirestore(getApp(), FIRESTORE_DATABASE_ID).collection("profiles").doc(uid).set(
+  const firestore = new Firestore({ projectId, databaseId: FIRESTORE_DATABASE_ID });
+  await firestore.collection("profiles").doc(uid).set(
     { is_admin: true, is_moderator: true },
     { merge: true }
   );
