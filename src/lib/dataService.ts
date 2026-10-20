@@ -469,34 +469,60 @@ export const DataService = {
     const uid = auth.currentUser?.uid || null;
     if (options?.currentUserId && options.currentUserId !== uid) throw new Error('The requested feed user does not match the signed-in account.');
     const loads: Promise<Post[]>[] = [];
+
     if (options?.groupId) {
       if (!uid) return [];
       const groups = await this.getGroups(uid);
       if (!groups.some(group => group.id === options.groupId && group.is_member)) return [];
-      loads.push(readCollection<Post>('posts', where('group_id', '==', options.groupId), where('visibility', '==', 'group_only'), where('status', '==', 'published')));
+      loads.push(readCollection<Post>('posts',
+        where('group_id', '==', options.groupId),
+        where('visibility', '==', 'group_only'),
+        where('status', '==', 'published')));
     } else if (options?.authorId) {
-      if (!uid) loads.push(readCollection<Post>('posts', where('author_id', '==', options.authorId), where('visibility', '==', 'public'), where('status', '==', 'published'), where('status', '==', 'published')));
-      else if (options.authorId === uid) loads.push(readCollection<Post>('posts', where('author_id', '==', uid)));
-      else {
-        loads.push(readCollection<Post>('posts', where('author_id', '==', options.authorId), where('visibility', '==', 'public')));
+      if (!uid) {
+        loads.push(readCollection<Post>('posts',
+          where('author_id', '==', options.authorId),
+          where('visibility', '==', 'public'),
+          where('status', '==', 'published')));
+      } else if (options.authorId === uid) {
+        // Owners may read all of their own posts; the UI filters to published posts below.
+        loads.push(readCollection<Post>('posts', where('author_id', '==', uid)));
+      } else {
+        loads.push(readCollection<Post>('posts',
+          where('author_id', '==', options.authorId),
+          where('visibility', '==', 'public'),
+          where('status', '==', 'published')));
         if ((await this.getFriendships(uid)).some(friend => friend.id === options.authorId)) {
-          loads.push(readCollection<Post>('posts', where('author_id', '==', options.authorId), where('visibility', '==', 'friends_only'), where('status', '==', 'published')));
+          loads.push(readCollection<Post>('posts',
+            where('author_id', '==', options.authorId),
+            where('visibility', '==', 'friends_only'),
+            where('status', '==', 'published')));
         }
       }
     } else {
-      loads.push(readCollection<Post>('posts', where('visibility', '==', 'public')));
+      loads.push(readCollection<Post>('posts',
+        where('visibility', '==', 'public'),
+        where('status', '==', 'published')));
       if (uid) {
+        // Own posts are read separately so private posts aren't mixed with public queries.
         loads.push(readCollection<Post>('posts', where('author_id', '==', uid)));
         const friends = await this.getFriendships(uid);
         for (const friend of friends) {
-          loads.push(readCollection<Post>('posts', where('author_id', '==', friend.id), where('visibility', '==', 'friends_only'), where('status', '==', 'published')));
+          loads.push(readCollection<Post>('posts',
+            where('author_id', '==', friend.id),
+            where('visibility', '==', 'friends_only'),
+            where('status', '==', 'published')));
         }
         const memberships = await readCollection<GroupMember>('group_members', where('user_id', '==', uid));
         for (const groupId of [...new Set(memberships.filter(m => m.membership_status === 'active').map(member => member.group_id))]) {
-          loads.push(readCollection<Post>('posts', where('group_id', '==', groupId), where('visibility', '==', 'group_only'), where('status', '==', 'published')));
+          loads.push(readCollection<Post>('posts',
+            where('group_id', '==', groupId),
+            where('visibility', '==', 'group_only'),
+            where('status', '==', 'published')));
         }
       }
     }
+
     const batches = await Promise.all(loads);
     const unique = [...new Map(batches.flat().filter(post => post.status === 'published').map(post => [post.id, post])).values()];
     const blocks = uid ? await this.getBlocks(uid) : [];
@@ -518,22 +544,22 @@ export const DataService = {
       const group = await this.getGroupById(id, uid || undefined);
       if (group) groups.set(id, group);
     }));
+
     if (uid && visible.length) {
       const likesByPost = new Map<string, number>();
       const likedByMe = new Set<string>();
       const commentsByPost = new Map<string, number>();
-      // Likes are visible to signed-in members; comments are fetched per readable post
-      // so a mixed query cannot expose comments from somebody else's private post.
+      // Query engagement one post at a time so each query's visibility can be checked by Firestore Rules.
       for (let offset = 0; offset < visible.length; offset += 20) {
         const batchPosts = visible.slice(offset, offset + 20);
-        // Per-post queries let Firestore rules verify that the signed-in viewer can
-        // read this specific post before returning its likes or comments.
         const [likeBatches, commentBatches] = await Promise.all([
           Promise.all(batchPosts.map(post =>
             readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', '==', post.id))
           )),
           Promise.all(batchPosts.map(post =>
-            readCollection<Comment>('comments', where('post_id', '==', post.id), where('status', '==', 'published'))
+            readCollection<Comment>('comments',
+              where('post_id', '==', post.id),
+              where('status', '==', 'published'))
           )),
         ]);
         for (let i = 0; i < batchPosts.length; i++) {
@@ -549,6 +575,7 @@ export const DataService = {
     } else {
       visible = visible.map(post => ({ ...post, author: authors.get(post.author_id), group: post.group_id ? groups.get(post.group_id) : undefined }));
     }
+
     store.posts = visible;
     store.save();
     return visible;
