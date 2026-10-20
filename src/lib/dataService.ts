@@ -424,8 +424,9 @@ export const DataService = {
     if (!auth.currentUser || auth.currentUser.uid !== userId) throw new Error('Sign in before joining a group.');
     const group = await this.getGroupById(groupId, userId);
     if (!group) throw new Error('Group not found or you do not have access.');
-    await readCollection<GroupMember>('group_members', where('user_id', '==', userId));
-    const existing = store.groupMembers.find(member => member.group_id === groupId && member.user_id === userId);
+    const ownMemberships = await readCollection<GroupMember>('group_members', where('user_id', '==', userId));
+    store.groupMembers = ownMemberships;
+    const existing = ownMemberships.find(member => member.group_id === groupId && member.user_id === userId);
     const now = new Date().toISOString();
     const membership: GroupMember = {
       group_id: groupId, user_id: userId, role: existing?.role === 'owner' ? 'owner' : 'member',
@@ -472,14 +473,14 @@ export const DataService = {
       if (!uid) return [];
       const groups = await this.getGroups(uid);
       if (!groups.some(group => group.id === options.groupId && group.is_member)) return [];
-      loads.push(readCollection<Post>('posts', where('group_id', '==', options.groupId), where('visibility', '==', 'group_only')));
+      loads.push(readCollection<Post>('posts', where('group_id', '==', options.groupId), where('visibility', '==', 'group_only'), where('status', '==', 'published')));
     } else if (options?.authorId) {
-      if (!uid) loads.push(readCollection<Post>('posts', where('author_id', '==', options.authorId), where('visibility', '==', 'public')));
+      if (!uid) loads.push(readCollection<Post>('posts', where('author_id', '==', options.authorId), where('visibility', '==', 'public'), where('status', '==', 'published'), where('status', '==', 'published')));
       else if (options.authorId === uid) loads.push(readCollection<Post>('posts', where('author_id', '==', uid)));
       else {
         loads.push(readCollection<Post>('posts', where('author_id', '==', options.authorId), where('visibility', '==', 'public')));
         if ((await this.getFriendships(uid)).some(friend => friend.id === options.authorId)) {
-          loads.push(readCollection<Post>('posts', where('author_id', '==', options.authorId), where('visibility', '==', 'friends_only')));
+          loads.push(readCollection<Post>('posts', where('author_id', '==', options.authorId), where('visibility', '==', 'friends_only'), where('status', '==', 'published')));
         }
       }
     } else {
@@ -488,11 +489,11 @@ export const DataService = {
         loads.push(readCollection<Post>('posts', where('author_id', '==', uid)));
         const friends = await this.getFriendships(uid);
         for (const friend of friends) {
-          loads.push(readCollection<Post>('posts', where('author_id', '==', friend.id), where('visibility', '==', 'friends_only')));
+          loads.push(readCollection<Post>('posts', where('author_id', '==', friend.id), where('visibility', '==', 'friends_only'), where('status', '==', 'published')));
         }
         const memberships = await readCollection<GroupMember>('group_members', where('user_id', '==', uid));
         for (const groupId of [...new Set(memberships.filter(m => m.membership_status === 'active').map(member => member.group_id))]) {
-          loads.push(readCollection<Post>('posts', where('group_id', '==', groupId), where('visibility', '==', 'group_only')));
+          loads.push(readCollection<Post>('posts', where('group_id', '==', groupId), where('visibility', '==', 'group_only'), where('status', '==', 'published')));
         }
       }
     }
@@ -523,21 +524,25 @@ export const DataService = {
       const commentsByPost = new Map<string, number>();
       // Likes are visible to signed-in members; comments are fetched per readable post
       // so a mixed query cannot expose comments from somebody else's private post.
-      for (let offset = 0; offset < visible.length; offset += 30) {
-        const batchPosts = visible.slice(offset, offset + 30);
-        const ids = batchPosts.map(post => post.id);
-        const [likes, commentBatches] = await Promise.all([
-          readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', 'in', ids)),
-          Promise.all(batchPosts.map(async post => ({
-            postId: post.id,
-            comments: await readCollection<Comment>('comments', where('post_id', '==', post.id)),
-          }))),
+      for (let offset = 0; offset < visible.length; offset += 20) {
+        const batchPosts = visible.slice(offset, offset + 20);
+        // Per-post queries let Firestore rules verify that the signed-in viewer can
+        // read this specific post before returning its likes or comments.
+        const [likeBatches, commentBatches] = await Promise.all([
+          Promise.all(batchPosts.map(post =>
+            readCollection<{ id: string; post_id: string; user_id: string }>('post_likes', where('post_id', '==', post.id))
+          )),
+          Promise.all(batchPosts.map(post =>
+            readCollection<Comment>('comments', where('post_id', '==', post.id), where('status', '==', 'published'))
+          )),
         ]);
-        for (const like of likes) {
-          likesByPost.set(like.post_id, (likesByPost.get(like.post_id) || 0) + 1);
-          if (like.user_id === uid) likedByMe.add(like.post_id);
+        for (let i = 0; i < batchPosts.length; i++) {
+          const post = batchPosts[i];
+          const likes = likeBatches[i];
+          likesByPost.set(post.id, likes.length);
+          if (likes.some(like => like.user_id === uid)) likedByMe.add(post.id);
+          commentsByPost.set(post.id, commentBatches[i].length);
         }
-        for (const item of commentBatches) commentsByPost.set(item.postId, item.comments.filter(comment => comment.status === 'published').length);
       }
       visible = visible.map(post => ({ ...post, author: authors.get(post.author_id), group: post.group_id ? groups.get(post.group_id) : undefined,
         likes_count: likesByPost.get(post.id) ?? 0, has_liked: likedByMe.has(post.id), comments_count: commentsByPost.get(post.id) ?? 0 }));
