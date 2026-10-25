@@ -45,8 +45,8 @@ jobs:
       - name: Install Cloud Functions dependencies
         run: npm --prefix functions install
 
-      - name: Deploy Firestore rules, indexes, Storage rules, and Cloud Functions
-        run: npx --yes firebase-tools@latest deploy --only firestore,storage,functions --project ai-studio-applet-webapp-8c041 --non-interactive
+      - name: Deploy Firestore rules, indexes, and Cloud Functions
+        run: npx --yes firebase-tools@latest deploy --only firestore,functions --project ai-studio-applet-webapp-8c041 --non-interactive
 
       - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0.11.0
@@ -55,3 +55,8 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           channelId: live
           projectId: ai-studio-applet-webapp-8c041
+
+      - name: Deploy Storage rules
+        id: deploy-storage-rules
+        continue-on-error: true
+        run: npx --yes firebase-tools@latest deploy --only storage --project ai-studio-applet-webapp-8c041 --non-interactive
